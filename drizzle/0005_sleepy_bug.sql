@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "campaigns_single_active_idx" ON "campaigns" USING btree ("status") WHERE "campaigns"."status" = 'ACTIVE';

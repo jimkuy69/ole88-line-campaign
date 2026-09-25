@@ -1,0 +1,31 @@
+# Claim state machine
+
+State transitions are validated in `src/domain/claim-state.ts`, independently of HTTP handlers and LINE.
+
+```mermaid
+stateDiagram-v2
+  [*] --> NEW
+  NEW --> ELIGIBLE
+  NEW --> EXPIRED
+  NEW --> CANCELLED
+  ELIGIBLE --> CLAIM_CREATED
+  ELIGIBLE --> EXPIRED
+  ELIGIBLE --> CANCELLED
+  CLAIM_CREATED --> ACTIVITY_SENT
+  CLAIM_CREATED --> IN_PROGRESS
+  CLAIM_CREATED --> EXPIRED
+  CLAIM_CREATED --> CANCELLED
+  ACTIVITY_SENT --> IN_PROGRESS
+  ACTIVITY_SENT --> PROOF_SUBMITTED
+  ACTIVITY_SENT --> EXPIRED
+  ACTIVITY_SENT --> CANCELLED
+  IN_PROGRESS --> PROOF_SUBMITTED
+  IN_PROGRESS --> EXPIRED
+  IN_PROGRESS --> CANCELLED
+  PROOF_SUBMITTED --> UNDER_REVIEW
+  UNDER_REVIEW --> APPROVED
+  UNDER_REVIEW --> REJECTED
+  APPROVED --> REWARD_SENT
+```
+
+`REJECTED`, `REWARD_SENT`, `EXPIRED`, and `CANCELLED` are terminal in this foundation. Invalid transitions throw `DomainError` with code `INVALID_CLAIM_TRANSITION`.
