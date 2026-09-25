@@ -15,7 +15,8 @@ const transitions: Record<ClaimState, readonly ClaimState[]> = {
   PROOF_SUBMITTED: ['UNDER_REVIEW'],
   UNDER_REVIEW: ['APPROVED', 'REJECTED'],
   APPROVED: ['REWARD_SENT'],
-  REJECTED: [], REWARD_SENT: [], EXPIRED: [], CANCELLED: [],
+  // A rejected claim can re-enter the proof workflow after the customer submits corrected evidence.
+  REJECTED: ['IN_PROGRESS'], REWARD_SENT: [], EXPIRED: [], CANCELLED: [],
 };
 
 export function canTransitionClaim(from: ClaimState, to: ClaimState): boolean {

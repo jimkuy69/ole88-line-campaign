@@ -1,0 +1,2 @@
+ALTER TABLE "outbound_messages" ADD COLUMN "retry_key" varchar(36);--> statement-breakpoint
+CREATE UNIQUE INDEX "outbound_messages_retry_key_uq" ON "outbound_messages" USING btree ("retry_key") WHERE "outbound_messages"."retry_key" IS NOT NULL;

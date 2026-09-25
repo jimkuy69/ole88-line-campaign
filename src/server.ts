@@ -10,10 +10,11 @@ import { verifyLineSignature } from './integrations/line/signature.js';
 import { DrizzleWebhookEventStore, WebhookInbox } from './modules/webhooks/webhook-inbox.js';
 import { createWebhookEventProcessor } from './modules/webhooks/webhook-processor.js';
 import { registerAdminRoutes } from './modules/admin/admin-routes.js';
+import { FileSystemEvidenceStorage } from './modules/evidence/storage.js';
 
 type Db = NodePgDatabase<typeof schema>;
 
-export function buildServer(config: ReturnType<typeof loadConfig>, db: Db, processor = createWebhookEventProcessor(db, config.LINE_CHANNEL_ACCESS_TOKEN ?? '')) {
+export function buildServer(config: ReturnType<typeof loadConfig>, db: Db, processor = createWebhookEventProcessor(db, config.LINE_CHANNEL_ACCESS_TOKEN ?? '',config.EVIDENCE_STORAGE_DIR)) {
   const app = Fastify({ logger: config.NODE_ENV !== 'test', bodyLimit: 1024 * 1024 });
   app.setErrorHandler((error, _request, reply) => {
     const failure=error as Error&{statusCode?:number};
@@ -27,7 +28,7 @@ export function buildServer(config: ReturnType<typeof loadConfig>, db: Db, proce
   let processingTimer: NodeJS.Timeout | undefined;
   app.addHook('onReady', async () => {
     processingTimer = setInterval(() => {
-      void processor.recoverExpiredWork().then(() => processor.processPending()).catch((error: unknown) => {
+      void processor.recoverExpiredWork().then(() => processor.processPending()).then(()=>processor.quarantineStalePushes()).then(()=>processor.processReadyPushes()).catch((error: unknown) => {
         app.log.error({ errorName: error instanceof Error ? error.name : 'PROCESSOR_ERROR' }, 'Webhook processor cycle failed');
       });
     }, 1000);
@@ -35,7 +36,7 @@ export function buildServer(config: ReturnType<typeof loadConfig>, db: Db, proce
   });
   app.addHook('onClose', async () => { if (processingTimer) clearInterval(processingTimer); });
   app.get('/health', async () => ({ status: 'ok' }));
-  registerAdminRoutes(app, db, config.NODE_ENV === 'production');
+  registerAdminRoutes(app, db, config.NODE_ENV === 'production',new FileSystemEvidenceStorage(config.EVIDENCE_STORAGE_DIR));
 
   app.post('/webhooks/line', async (request, reply) => {
     if (!config.LINE_CHANNEL_SECRET) return reply.code(503).send({ error: 'LINE webhook is not configured' });

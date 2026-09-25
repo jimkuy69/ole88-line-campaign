@@ -1,5 +1,9 @@
 import { z } from 'zod';
 
+export const CAMPAIGN_MESSAGE_KEYS = ['WELCOME_MESSAGE','CLAIM_CREATED','CLAIM_ALREADY_EXISTS','CLAIM_STATUS_IN_PROGRESS','CLAIM_STATUS_UNDER_REVIEW',
+  'CLAIM_STATUS_APPROVED','CLAIM_STATUS_REJECTED','EVIDENCE_SELECT_ACTIVITY','EVIDENCE_UPLOAD_PROMPT','EVIDENCE_RECEIVED','EVIDENCE_PENDING',
+  'EVIDENCE_INVALID','EVIDENCE_APPROVED','EVIDENCE_REJECTED'] as const;
+
 const draftShape = z.object({
   campaign: z.object({
     code: z.string().regex(/^[A-Za-z0-9_-]{2,100}$/), name: z.string().min(1).max(200), templateType: z.string().min(1).max(64),
@@ -13,7 +17,7 @@ const draftShape = z.object({
   activities: z.array(z.object({ activityKey:z.string().regex(/^[A-Za-z0-9_-]{1,100}$/),title:z.string().max(5000),description:z.string().max(5000).nullable(),
     actionType:z.enum(['URI','POSTBACK']),actionValue:z.string().nullable(),displayOrder:z.number().int().nonnegative(),required:z.boolean(),enabled:z.boolean(),
     metadata:z.record(z.string(),z.unknown()).default({}) }).strict()).max(200),
-  messages: z.array(z.object({messageKey:z.enum(['WELCOME_MESSAGE','CLAIM_CREATED','CLAIM_ALREADY_EXISTS']),messageType:z.literal('TEXT'),content:z.string().max(5000),metadata:z.record(z.string(),z.unknown()).default({})}).strict()).max(3),
+  messages: z.array(z.object({messageKey:z.enum(CAMPAIGN_MESSAGE_KEYS),messageType:z.literal('TEXT'),content:z.string().max(5000),metadata:z.record(z.string(),z.unknown()).default({})}).strict()).max(CAMPAIGN_MESSAGE_KEYS.length),
 }).strict();
 function safeHttps(value:string|null|undefined) {
   if(!value)return true;
@@ -40,12 +44,24 @@ export const TEMPLATES: Array<{id:string;name:string;description:string;draft:Ca
     campaign:{code:'NEW_CAMPAIGN',name:'New campaign',templateType:'WELCOME_CLAIM',claimPolicy:'SINGLE_CLAIM',title:'Campaign title',subtitle:'Short campaign description',rewardType:'',rewardValue:'',heroImage:'',startAt:null,endAt:null,maxClaims:null,settings:{}},
     buttons:[{buttonKey:'BTN_CLAIM',label:'Claim reward',actionType:'POSTBACK',actionValue:'',displayOrder:0,enabled:true,metadata:{}}],
     activities:[{activityKey:'ACTIVITY_1',title:'First activity',description:'Explain what participants do.',actionType:'URI',actionValue:null,displayOrder:0,required:false,enabled:true,metadata:{}}],
-    messages:[{messageKey:'WELCOME_MESSAGE',messageType:'TEXT',content:'Welcome! Choose a campaign below.',metadata:{}},{messageKey:'CLAIM_CREATED',messageType:'TEXT',content:'Your claim was created.',metadata:{}},{messageKey:'CLAIM_ALREADY_EXISTS',messageType:'TEXT',content:'You already have a claim.',metadata:{}}],
+    messages:defaultMessages('Welcome! Choose a campaign below.'),
   }},
   { id:'activity-challenge',name:'Activity challenge',description:'A reusable claim campaign with several activities.',draft:{
     campaign:{code:'NEW_CHALLENGE',name:'New activity challenge',templateType:'ACTIVITY_CHALLENGE',claimPolicy:'SINGLE_CLAIM',title:'Challenge',subtitle:'Complete the activities',rewardType:'',rewardValue:'',heroImage:'',startAt:null,endAt:null,maxClaims:null,settings:{}},
     buttons:[{buttonKey:'BTN_CLAIM',label:'Start challenge',actionType:'POSTBACK',actionValue:'',displayOrder:0,enabled:true,metadata:{}}],
     activities:[{activityKey:'FOLLOW_CHANNEL',title:'Open activity',description:'',actionType:'URI',actionValue:null,displayOrder:0,required:true,enabled:true,metadata:{}}],
-    messages:[{messageKey:'WELCOME_MESSAGE',messageType:'TEXT',content:'Welcome! Start your challenge.',metadata:{}},{messageKey:'CLAIM_CREATED',messageType:'TEXT',content:'Your challenge is ready.',metadata:{}},{messageKey:'CLAIM_ALREADY_EXISTS',messageType:'TEXT',content:'Your challenge is already active.',metadata:{}}],
+    messages:defaultMessages('Welcome! Start your challenge.'),
   }},
 ];
+
+function defaultMessages(welcome:string) {
+  const text:Record<typeof CAMPAIGN_MESSAGE_KEYS[number],string>={
+    WELCOME_MESSAGE:welcome,CLAIM_CREATED:'Your claim was created.',CLAIM_ALREADY_EXISTS:'You already have a claim in this campaign.',
+    CLAIM_STATUS_IN_PROGRESS:'Your campaign activities are in progress.',CLAIM_STATUS_UNDER_REVIEW:'Your evidence is waiting for review.',
+    CLAIM_STATUS_APPROVED:'Your required activities were approved. Reward delivery is handled separately.',CLAIM_STATUS_REJECTED:'Evidence was rejected. Please review the note and submit it again.',
+    EVIDENCE_SELECT_ACTIVITY:'Choose the activity you are submitting proof for.',EVIDENCE_UPLOAD_PROMPT:'Send one JPEG or PNG image, up to 10 MB, for this activity.',
+    EVIDENCE_RECEIVED:'We received your evidence.',EVIDENCE_PENDING:'It is waiting for Admin review.',EVIDENCE_INVALID:'That image could not be accepted. Send a JPEG or PNG image under 10 MB.',
+    EVIDENCE_APPROVED:'Your activity evidence was approved.',EVIDENCE_REJECTED:'Your activity evidence was rejected: {{reason}}',
+  };
+  return CAMPAIGN_MESSAGE_KEYS.map((messageKey)=>({messageKey,messageType:'TEXT' as const,content:text[messageKey],metadata:{}}));
+}

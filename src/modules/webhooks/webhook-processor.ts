@@ -1,9 +1,13 @@
 import { and, asc, eq, isNull, lte, or, sql } from 'drizzle-orm';
+import { randomUUID } from 'node:crypto';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import * as schema from '../../db/schema.js';
 import type { NormalizedLineEvent } from '../../integrations/line/events.js';
 import { LineEventRouter } from '../../integrations/line/event-router.js';
-import { LineMessageAdapter, LineMessagingClient, type LineMessageObject } from '../../integrations/line/message-client.js';
+import { LineMessageAdapter, LineMessagingClient, LineMessageContentClient, type LineMessageObject } from '../../integrations/line/message-client.js';
+import { FileSystemEvidenceStorage } from '../evidence/storage.js';
+import { EvidenceService } from '../evidence/evidence-service.js';
+import { parseEvidenceRequestPostback } from '../evidence/postback.js';
 import { DomainError } from '../../domain/errors.js';
 import { ClaimService } from '../claims/claim-service.js';
 import { DrizzleClaimStore } from '../claims/drizzle-claim-store.js';
@@ -16,7 +20,7 @@ type Db = NodePgDatabase<typeof schema>;
 type InboxRow = typeof schema.webhookEvents.$inferSelect;
 const PROCESSING_LEASE_MS = 45_000;
 
-export interface ReplySender { sendReply(token: string, messages: LineMessageObject[]): Promise<void> }
+export interface ReplySender { sendReply(token: string, messages: LineMessageObject[]): Promise<void>; sendToUser?(userId:string,messages:LineMessageObject[],retryKey?:string):Promise<void> }
 
 export { buildCampaignCard, buildActivityCard };
 
@@ -25,11 +29,13 @@ export class WebhookEventProcessor {
   private readonly campaigns: CampaignService;
   private readonly claims: ClaimService;
 
-  constructor(private readonly db: Db, private readonly sender: ReplySender, private readonly accessTokenConfigured = true) {
+  constructor(private readonly db: Db, private readonly sender: ReplySender, private readonly accessTokenConfigured = true,
+    private readonly evidence?:EvidenceService) {
     this.campaigns = new CampaignService(db);
     this.claims = new ClaimService(new DrizzleClaimStore(db));
     this.router.register('follow', (event) => this.onFollow(event));
     this.router.register('postback', (event) => this.onPostback(event));
+    this.router.register('message', (event) => this.onMessage(event));
   }
 
   async processPending(limit = 20) {
@@ -40,7 +46,7 @@ export class WebhookEventProcessor {
       try {
         const existingOutbound = await this.getOutbound(row);
         if (existingOutbound?.status === 'READY') {
-          await this.deliverReply(existingOutbound.dedupeKey);
+          await this.deliverOutbox(existingOutbound.dedupeKey);
           const [updatedOutbound] = await this.db.select().from(schema.outboundMessages).where(eq(schema.outboundMessages.id, existingOutbound.id)).limit(1);
           await this.finishInbox(row.id, 'PROCESSED', `OUTBOUND_RESUMED_${updatedOutbound?.status ?? 'UNKNOWN'}`);
           processed += 1;
@@ -93,6 +99,22 @@ export class WebhookEventProcessor {
     });
   }
 
+  async processReadyPushes(limit=50) {
+    if(!this.accessTokenConfigured)return 0;
+    const rows=await this.db.select({dedupeKey:schema.outboundMessages.dedupeKey}).from(schema.outboundMessages)
+      .where(and(eq(schema.outboundMessages.deliveryType,'PUSH'),eq(schema.outboundMessages.status,'READY')))
+      .orderBy(asc(schema.outboundMessages.createdAt)).limit(limit);
+    for(const row of rows)await this.deliverOutbox(row.dedupeKey);
+    return rows.length;
+  }
+
+  async quarantineStalePushes(now=new Date()) {
+    const staleAt=new Date(now.getTime()-PROCESSING_LEASE_MS);
+    const rows=await this.db.update(schema.outboundMessages).set({status:'UNCERTAIN',errorCode:'PUSH_PROCESS_CRASH_OUTCOME_UNCERTAIN',updatedAt:now})
+      .where(and(eq(schema.outboundMessages.deliveryType,'PUSH'),eq(schema.outboundMessages.status,'SENDING'),lte(schema.outboundMessages.sendingStartedAt,staleAt))).returning({id:schema.outboundMessages.id});
+    return rows.length;
+  }
+
   private async claimNext(): Promise<InboxRow | null> {
     return this.db.transaction(async (tx) => {
       const now = new Date();
@@ -120,10 +142,19 @@ export class WebhookEventProcessor {
   }
 
   private async getOutbound(row: InboxRow) {
-    if (row.eventType !== 'follow' && row.eventType !== 'postback') return null;
     const [outbound] = await this.db.select().from(schema.outboundMessages)
       .where(eq(schema.outboundMessages.dedupeKey, `line-reply:${row.providerEventId}`)).limit(1);
     return outbound ?? null;
+  }
+
+  private async getOrCreatePushRetryKey(id:string) {
+    const [created]=await this.db.update(schema.outboundMessages).set({retryKey:randomUUID()})
+      .where(and(eq(schema.outboundMessages.id,id),isNull(schema.outboundMessages.retryKey))).returning({retryKey:schema.outboundMessages.retryKey});
+    if(created?.retryKey)return created.retryKey;
+    const [existing]=await this.db.select({retryKey:schema.outboundMessages.retryKey}).from(schema.outboundMessages)
+      .where(eq(schema.outboundMessages.id,id)).limit(1);
+    if(!existing?.retryKey)throw new DomainError('LINE push retry key was not persisted.','PUSH_RETRY_KEY_MISSING');
+    return existing.retryKey;
   }
 
   private normalize(row: InboxRow): NormalizedLineEvent {
@@ -158,6 +189,8 @@ export class WebhookEventProcessor {
     const replyToken = string(event.payload.replyToken);
     const postback = object(event.payload.postback);
     const rawData = string(postback?.data);
+    const evidenceRequest=parseEvidenceRequestPostback(rawData??'');
+    if(evidenceRequest){if(!lineUserId||!replyToken)return;await this.onEvidenceRequest(event,lineUserId,replyToken,evidenceRequest.campaignCode,evidenceRequest.activityKey);return;}
     const parsed = parseCampaignButtonPostback(rawData ?? '');
     if (!lineUserId || !replyToken || !parsed || parsed.buttonKey !== 'BTN_CLAIM') return;
     const campaign = await this.campaigns.getCampaignByCode(parsed.campaignCode);
@@ -173,12 +206,61 @@ export class WebhookEventProcessor {
     if (!identity) return;
     const result = await this.claims.createClaim(identity.userId, campaign.code);
     const messages = await this.campaigns.getCampaignMessages(campaign.id);
-    const response = messages.find((item) => item.messageKey === (result.created ? 'CLAIM_CREATED' : 'CLAIM_ALREADY_EXISTS'))?.content;
+    await this.ensureClaimActivities(result.claim.id,campaign.id);
+    const statusKey=result.created?'CLAIM_CREATED':claimStatusMessageKey(result.claim.status);
+    const response = messages.find((item) => item.messageKey === statusKey)?.content
+      ?? messages.find((item) => item.messageKey === (result.created ? 'CLAIM_CREATED' : 'CLAIM_ALREADY_EXISTS'))?.content;
     if (!response) return;
     const activities = (await this.campaigns.getCampaignActivities(campaign.id)).filter((activity) => activity.enabled);
     const payload: LineMessageObject[] = [{ type: 'text', text: response }];
-    if (activities.length) payload.push(buildActivityCard(campaign, activities));
+    if (activities.length && !['APPROVED','REWARD_SENT'].includes(result.claim.status)) payload.push(buildActivityCard(campaign, activities, result.claim.claimCode));
     await this.enqueueReply(event.providerEventId, lineUserId, replyToken, payload);
+  }
+
+  private async onEvidenceRequest(event:NormalizedLineEvent,lineUserId:string,replyToken:string,campaignCode:string,activityKey:string){
+    if(!this.evidence)throw new DomainError('Evidence storage is not configured.','EVIDENCE_STORAGE_MISSING');
+    this.assertDeliveryConfigured();
+    try{
+      const context=await this.evidence.requestUploadContext(lineUserId,campaignCode,activityKey,event.providerEventId);
+      const text=(await this.campaigns.getCampaignMessages(context.campaign.id)).find((m)=>m.messageKey==='EVIDENCE_UPLOAD_PROMPT')?.content;
+      if(text)await this.enqueueReply(event.providerEventId,lineUserId,replyToken,[{type:'text',text}]);
+    }catch(error){
+      if (error instanceof DomainError && error.code === 'LINE_CONFIG_MISSING') throw error;
+      const campaign=await this.campaigns.getCampaignByCode(campaignCode).catch(()=>null);
+      const text=campaign?(await this.campaigns.getCampaignMessages(campaign.id)).find((m)=>m.messageKey==='EVIDENCE_SELECT_ACTIVITY')?.content:null;
+      await this.enqueueReply(event.providerEventId,lineUserId,replyToken,[{type:'text',text:text||'Select a specific activity using its Submit proof button before sending an image.'}]);
+    }
+  }
+
+  private async onMessage(event:NormalizedLineEvent){
+    const actor=object(event.payload.source);const lineUserId=string(actor?.userId);const replyToken=string(event.payload.replyToken);
+    const message=object(event.payload.message);if(!lineUserId||!replyToken||message?.type!=='image')return;
+    const messageId=string(message.id);if(!messageId)return;
+    this.assertDeliveryConfigured();
+    if(!this.evidence)throw new DomainError('Evidence storage is not configured.','EVIDENCE_STORAGE_MISSING');
+    const result=await this.evidence.receiveImage(lineUserId,messageId,event.providerEventId);
+    if(result.kind==='no_context'){
+      await this.enqueueReply(event.providerEventId,lineUserId,replyToken,[{type:'text',text:'Select a specific activity using its Submit proof button before sending an image.'}]);return;
+    }
+    const messages=await this.campaigns.getCampaignMessages(result.campaign.id);
+    if(result.kind==='invalid_image'){
+      const text=messages.find((m)=>m.messageKey==='EVIDENCE_INVALID')?.content;
+      await this.enqueueReply(event.providerEventId,lineUserId,replyToken,[{type:'text',text:text||'Send a JPEG or PNG image under 10 MB.'}]);return;
+    }
+    if(result.kind==='duplicate'){
+      // A redelivered image event is acknowledged without creating or notifying twice.
+      const prior=await this.db.select().from(schema.outboundMessages).where(eq(schema.outboundMessages.dedupeKey,`line-reply:${event.providerEventId}`)).limit(1);
+      if(prior.length)return;
+    }
+    const receipt=messages.find((m)=>m.messageKey==='EVIDENCE_RECEIVED')?.content;
+    const pending=messages.find((m)=>m.messageKey==='EVIDENCE_PENDING')?.content;
+    const reply:LineMessageObject[]=[];if(receipt)reply.push({type:'text',text:receipt});if(pending)reply.push({type:'text',text:pending});
+    if(reply.length)await this.enqueueReply(event.providerEventId,lineUserId,replyToken,reply);
+  }
+
+  private async ensureClaimActivities(claimId:string,campaignId:string){
+    const activities=await this.db.select({id:schema.campaignActivities.id}).from(schema.campaignActivities).where(eq(schema.campaignActivities.campaignId,campaignId));
+    if(activities.length)await this.db.insert(schema.claimActivities).values(activities.map((activity)=>({claimId,campaignActivityId:activity.id}))).onConflictDoNothing();
   }
 
   private async ensureLineIdentity(lineUserId: string) {
@@ -198,7 +280,7 @@ export class WebhookEventProcessor {
     this.assertDeliveryConfigured();
     if (messages.length > 5) throw new DomainError('LINE reply supports at most five message objects.', 'LINE_REPLY_TOO_MANY_MESSAGES');
     await this.db.insert(schema.outboundMessages).values({
-      dedupeKey: `line-reply:${dedupeKey}`, recipientLineUserId: recipient, replyToken,
+      dedupeKey: `line-reply:${dedupeKey}`, deliveryType:'REPLY',recipientLineUserId: recipient, replyToken,
       messages: messages as Record<string, unknown>[], status: 'READY',
     }).onConflictDoNothing({ target: schema.outboundMessages.dedupeKey });
     await this.deliverReply(`line-reply:${dedupeKey}`);
@@ -222,13 +304,36 @@ export class WebhookEventProcessor {
     }
   }
 
+  private async deliverOutbox(dedupeKey:string){
+    this.assertDeliveryConfigured();
+    const [row]=await this.db.update(schema.outboundMessages).set({status:'SENDING',sendingStartedAt:new Date(),attemptCount:sql`${schema.outboundMessages.attemptCount}+1`,updatedAt:new Date()})
+      .where(and(eq(schema.outboundMessages.dedupeKey,dedupeKey),eq(schema.outboundMessages.status,'READY'))).returning();
+    if(!row)return;
+    try{
+      if(row.deliveryType==='PUSH'){
+        if(!this.sender.sendToUser)throw new Error('LINE push adapter is unavailable');
+        const pushKey=await this.getOrCreatePushRetryKey(row.id);
+        await this.sender.sendToUser(row.recipientLineUserId,row.messages,pushKey);
+      }else{
+        if(!row.replyToken)throw new Error('Reply token missing');
+        await this.sender.sendReply(row.replyToken,row.messages);
+      }
+      await this.db.update(schema.outboundMessages).set({status:'SENT',sentAt:new Date(),replyToken:null,errorCode:null}).where(eq(schema.outboundMessages.id,row.id));
+    }catch(error){
+      const status=typeof error==='object'&&error!==null&&'status'in error?Number(error.status):null;
+      await this.db.update(schema.outboundMessages).set({status:status!==null&&status>=400&&status<500?'FAILED':'UNCERTAIN',replyToken:null,errorCode:errorCode(error)}).where(eq(schema.outboundMessages.id,row.id));
+    }
+  }
+
   private assertDeliveryConfigured() {
     if (!this.accessTokenConfigured) throw new DomainError('LINE_CHANNEL_ACCESS_TOKEN is required before reply delivery.', 'LINE_CONFIG_MISSING');
   }
 }
 
-export function createWebhookEventProcessor(db: Db, accessToken: string) {
-  return new WebhookEventProcessor(db, new LineMessageAdapter(new LineMessagingClient(accessToken)), Boolean(accessToken.trim()));
+export function createWebhookEventProcessor(db: Db, accessToken: string, evidenceStorageDir='work/evidence') {
+  const adapter=new LineMessageAdapter(new LineMessagingClient(accessToken));
+  const evidence=new EvidenceService(db,new LineMessageContentClient(accessToken),new FileSystemEvidenceStorage(evidenceStorageDir));
+  return new WebhookEventProcessor(db,adapter,Boolean(accessToken.trim()),evidence);
 }
 
 export { campaignButtonPostback };
@@ -238,3 +343,4 @@ function object(value: unknown): Record<string, unknown> | null {
 }
 function string(value: unknown): string | null { return typeof value === 'string' && value.length ? value : null; }
 function errorCode(error: unknown) { return error instanceof Error ? error.name : 'PROCESSING_ERROR'; }
+function claimStatusMessageKey(status:string){return({IN_PROGRESS:'CLAIM_STATUS_IN_PROGRESS',PROOF_SUBMITTED:'CLAIM_STATUS_UNDER_REVIEW',UNDER_REVIEW:'CLAIM_STATUS_UNDER_REVIEW',APPROVED:'CLAIM_STATUS_APPROVED',REJECTED:'CLAIM_STATUS_REJECTED',REWARD_SENT:'CLAIM_STATUS_APPROVED'} as Record<string,string>)[status]??'CLAIM_ALREADY_EXISTS'}

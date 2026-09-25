@@ -97,18 +97,36 @@ export const claimActivities = pgTable('claim_activities', {
   clickedAt: timestamp('clicked_at', { withTimezone: true }), completedAt: timestamp('completed_at', { withTimezone: true }),
   metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default({}),
   createdAt: createdAt(), updatedAt: updatedAt(),
-}, (t) => [unique('claim_activities_claim_activity_uq').on(t.claimId, t.campaignActivityId)]);
+}, (t) => [unique('claim_activities_claim_activity_uq').on(t.claimId, t.campaignActivityId),
+  check('claim_activities_status_ck', sql`${t.status} IN ('PENDING', 'SUBMITTED', 'UNDER_REVIEW', 'APPROVED', 'REJECTED')`)]);
 
 export const evidence = pgTable('evidence', {
   id: uuid('id').defaultRandom().primaryKey(),
   claimId: uuid('claim_id').notNull().references(() => claims.id, { onDelete: 'cascade' }),
+  claimActivityId: uuid('claim_activity_id').references(() => claimActivities.id, { onDelete: 'cascade' }),
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  channelIdentityId: uuid('channel_identity_id').references(() => channelIdentities.id, { onDelete: 'restrict' }),
   type: varchar('type', { length: 32 }).notNull(), storageKey: text('storage_key').notNull(),
   sourceMessageId: varchar('source_message_id', { length: 255 }),
   status: varchar('status', { length: 32 }).notNull().default('SUBMITTED'),
+  version: integer('version').notNull().default(1), reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+  reviewReason: text('review_reason'),
   metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default({}),
   createdAt: createdAt(), updatedAt: updatedAt(),
-}, (t) => [index('evidence_claim_created_idx').on(t.claimId, t.createdAt)]);
+}, (t) => [index('evidence_claim_created_idx').on(t.claimId, t.createdAt),
+  uniqueIndex('evidence_source_message_uq').on(t.sourceMessageId).where(sql`${t.sourceMessageId} IS NOT NULL`),
+  index('evidence_status_created_idx').on(t.status, t.createdAt),
+  check('evidence_status_ck', sql`${t.status} IN ('SUBMITTED', 'APPROVED', 'REJECTED')`)]);
+
+export const evidenceUploadContexts = pgTable('evidence_upload_contexts', {
+  channelIdentityId: uuid('channel_identity_id').primaryKey().references(() => channelIdentities.id, { onDelete: 'cascade' }),
+  claimId: uuid('claim_id').notNull().references(() => claims.id, { onDelete: 'cascade' }),
+  claimActivityId: uuid('claim_activity_id').notNull().references(() => claimActivities.id, { onDelete: 'cascade' }),
+  requestedEventId: varchar('requested_event_id', { length: 128 }).notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  consumedAt: timestamp('consumed_at', { withTimezone: true }),
+  createdAt: createdAt(),
+}, (t) => [index('evidence_upload_contexts_expiry_idx').on(t.expiresAt)]);
 
 export const trackingEvents = pgTable('tracking_events', {
   id: uuid('id').defaultRandom().primaryKey(),
@@ -157,10 +175,14 @@ export const webhookEvents = pgTable('webhook_events', {
 
 export const outboundMessages = pgTable('outbound_messages', {
   id: uuid('id').defaultRandom().primaryKey(), dedupeKey: varchar('dedupe_key', { length: 200 }).notNull().unique(),
+  deliveryType: varchar('delivery_type', { length: 16 }).notNull().default('REPLY'),
+  retryKey: varchar('retry_key', { length: 36 }),
   recipientLineUserId: varchar('recipient_line_user_id', { length: 255 }).notNull(),
   replyToken: text('reply_token'), messages: jsonb('messages').$type<Record<string, unknown>[]>().notNull(),
   status: outboundStatus('status').notNull().default('READY'), attemptCount: integer('attempt_count').notNull().default(0),
   errorCode: varchar('error_code', { length: 100 }), lineRequestId: varchar('line_request_id', { length: 255 }),
   sendingStartedAt: timestamp('sending_started_at', { withTimezone: true }),
   createdAt: createdAt(), updatedAt: updatedAt(), sentAt: timestamp('sent_at', { withTimezone: true }),
-}, (t) => [index('outbound_messages_status_created_idx').on(t.status, t.createdAt)]);
+}, (t) => [index('outbound_messages_status_created_idx').on(t.status, t.createdAt),
+  uniqueIndex('outbound_messages_retry_key_uq').on(t.retryKey).where(sql`${t.retryKey} IS NOT NULL`),
+  check('outbound_messages_delivery_type_ck', sql`${t.deliveryType} IN ('REPLY', 'PUSH')`)]);

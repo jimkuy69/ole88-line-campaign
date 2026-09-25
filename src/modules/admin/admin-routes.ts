@@ -8,6 +8,8 @@ import * as schema from '../../db/schema.js';
 import { AdminAuthService } from './admin-auth-service.js';
 import { CampaignAdminService } from './campaign-admin-service.js';
 import { templateDraftSchema } from './templates.js';
+import { EvidenceService } from '../evidence/evidence-service.js';
+import type { EvidenceStorage } from '../evidence/storage.js';
 
 type Db = NodePgDatabase<typeof schema>;
 const COOKIE = 'ole88_admin_session';
@@ -29,7 +31,7 @@ const publicRoot=resolve(process.cwd(),'public');
 const usernameSchema=z.string().trim().min(3).max(120).regex(/^[A-Za-z0-9_.@-]+$/);
 const codeSchema=z.string().regex(/^[A-Za-z0-9_-]{2,100}$/);
 
-export function registerAdminRoutes(app:FastifyInstance, db:Db, isProduction:boolean) {
+export function registerAdminRoutes(app:FastifyInstance, db:Db, isProduction:boolean, evidenceStorage:EvidenceStorage) {
   app.addHook('onSend',async(request,reply,payload)=>{
     if(request.url.startsWith('/admin')||request.url.startsWith('/api/admin/')){
       reply.header('cache-control','no-store');reply.header('referrer-policy','no-referrer');reply.header('x-content-type-options','nosniff');
@@ -38,6 +40,7 @@ export function registerAdminRoutes(app:FastifyInstance, db:Db, isProduction:boo
   });
   const auth=new AdminAuthService(db);
   const campaigns=new CampaignAdminService(db);
+  const evidence=new EvidenceService(db,{getMessageContent:async()=>{throw new Error('Evidence media retrieval is worker-only.')}},evidenceStorage);
   app.get('/admin',async(_request,reply)=>reply.header('content-type','text/html; charset=utf-8').header('content-security-policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'").send(await readFile(resolve(publicRoot,'admin.html'))));
   app.get('/admin.js',async(_request,reply)=>reply.header('content-type','text/javascript; charset=utf-8').header('x-content-type-options','nosniff').send(await readFile(resolve(publicRoot,'admin.js'))));
   app.get('/admin.css',async(_request,reply)=>reply.header('content-type','text/css; charset=utf-8').send(await readFile(resolve(publicRoot,'admin.css'))));
@@ -97,6 +100,30 @@ export function registerAdminRoutes(app:FastifyInstance, db:Db, isProduction:boo
     const data=z.object({expectedVersion:z.number().int().positive()}).safeParse(body(req));if(!data.success)return rep.code(400).send({error:'Invalid input.'});
     return campaigns.pause((req.params as {id:string}).id,session.user.id,data.data.expectedVersion);
   }));
+  app.get('/api/admin/reviews',(req,rep)=>route(req,rep,async()=>{
+    const query=z.object({campaignId:z.string().uuid().optional(),status:z.enum(['SUBMITTED','APPROVED','REJECTED']).optional(),from:z.string().datetime({offset:true}).optional(),to:z.string().datetime({offset:true}).optional()}).safeParse(req.query);
+    if(!query.success)return rep.code(400).send({error:'Invalid review filters.'});
+    return {items:await evidence.listQueue({...(query.data.campaignId?{campaignId:query.data.campaignId}:{}),...(query.data.status?{status:query.data.status}:{}),
+      ...(query.data.from?{from:new Date(query.data.from)}:{}),...(query.data.to?{to:new Date(query.data.to)}:{})})};
+  }));
+  app.get('/api/admin/review-campaigns',(req,rep)=>route(req,rep,async()=>({campaigns:await campaigns.list()})));
+  app.get('/api/admin/reviews/:id',(req,rep)=>route(req,rep,async()=>evidence.reviewDetail((req.params as {id:string}).id)));
+  app.get('/api/admin/evidence/:id/content',(req,rep)=>route(req,rep,async()=>{
+    const id=(req.params as {id:string}).id;
+    const key=await evidence.assertMediaReadable(id);
+    const data=await evidenceStorage.read(key);
+    const contentType=key.endsWith('.png')?'image/png':'image/jpeg';
+    return rep.header('content-type',contentType).header('cache-control','private, no-store').header('x-content-type-options','nosniff')
+      .header('content-disposition','inline; filename="evidence"').send(data);
+  }));
+  app.post('/api/admin/reviews/:id/approve',(req,rep)=>route(req,rep,async(session)=>{
+    const input=z.object({expectedVersion:z.number().int().positive()}).safeParse(body(req));if(!input.success)return rep.code(400).send({error:'Invalid input.'});
+    return evidence.decide((req.params as {id:string}).id,session.user.id,'APPROVED',input.data.expectedVersion);
+  }));
+  app.post('/api/admin/reviews/:id/reject',(req,rep)=>route(req,rep,async(session)=>{
+    const input=z.object({expectedVersion:z.number().int().positive(),reason:z.string().trim().min(1).max(1000)}).safeParse(body(req));if(!input.success)return rep.code(400).send({error:'A rejection reason is required.',details:input.error.issues});
+    return evidence.decide((req.params as {id:string}).id,session.user.id,'REJECTED',input.data.expectedVersion,input.data.reason);
+  }));
 }
 
 async function requireAdmin(request:FastifyRequest,reply:FastifyReply,auth:AdminAuthService,mutating:boolean) {
@@ -117,7 +144,7 @@ function normalizeDraft<T extends {campaign:{heroImage:string|null;rewardType:st
 function sendError(reply:FastifyReply,error:unknown) {
   const e=error as {code?:string;message?:string;constraint?:string};
   if(e.code==='CAMPAIGN_NOT_PUBLISHABLE')return reply.code(422).send({error:e.message,issues:(error as {details?:unknown}).details??[]});
-  const known=new Map([['CAMPAIGN_NOT_FOUND',404],['TEMPLATE_NOT_FOUND',404],['ACTIVE_CAMPAIGN_IMMUTABLE',409],['CAMPAIGN_ALREADY_ACTIVE',409],['CAMPAIGN_VERSION_CONFLICT',409],['CAMPAIGN_PUBLISH_CONFLICT',409],['CAMPAIGN_NOT_ACTIVE',409],['ACTIVITY_IN_USE',409],['ANOTHER_CAMPAIGN_ACTIVE',409],['CAMPAIGN_NOT_PUBLISHABLE',422]]);
+  const known=new Map([['CAMPAIGN_NOT_FOUND',404],['CLAIM_NOT_FOUND',404],['CLAIM_ACTIVITY_NOT_FOUND',404],['EVIDENCE_NOT_FOUND',404],['TEMPLATE_NOT_FOUND',404],['ACTIVE_CAMPAIGN_IMMUTABLE',409],['CAMPAIGN_ALREADY_ACTIVE',409],['CAMPAIGN_VERSION_CONFLICT',409],['CAMPAIGN_PUBLISH_CONFLICT',409],['CAMPAIGN_NOT_ACTIVE',409],['ACTIVITY_IN_USE',409],['ANOTHER_CAMPAIGN_ACTIVE',409],['CAMPAIGN_NOT_PUBLISHABLE',422],['EVIDENCE_VERSION_CONFLICT',409],['EVIDENCE_OWNER_MISMATCH',409],['EVIDENCE_SOURCE_CONFLICT',409],['CLAIM_NOT_ACCEPTING_EVIDENCE',409],['CLAIM_ACTIVITY_ALREADY_APPROVED',409],['CLAIM_ACTIVITY_EVIDENCE_PENDING',409],['EVIDENCE_LEGACY_UNLINKED',409],['EVIDENCE_CONTEXT_STALE',409],['EVIDENCE_RELATIONSHIP_INVALID',409],['INVALID_CLAIM_TRANSITION',409],['EVIDENCE_REJECTION_REASON_REQUIRED',400]]);
   const status=e.code?known.get(e.code):undefined;
   if(status)return reply.code(status).send({error:e.message,code:e.code});
   if(e.code==='23505')return reply.code(409).send({error:'A campaign with this code already exists.'});

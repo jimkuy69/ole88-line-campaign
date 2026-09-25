@@ -1,9 +1,10 @@
 import { DomainError } from '../../domain/errors.js';
+import { evidenceRequestPostback } from '../../modules/evidence/postback.js';
 import type { LineMessageObject } from './message-client.js';
 
 type CampaignContent={title:string|null;subtitle:string|null;heroImage:string|null};
 type ButtonContent={buttonKey:string;label:string;actionType:string;actionValue:string|null;enabled:boolean};
-type ActivityContent={title:string;description?:string|null;actionType:string;actionValue:string|null};
+type ActivityContent={activityKey:string;title:string;description?:string|null;actionType:string;actionValue:string|null};
 
 export function buildCampaignCard(campaign:CampaignContent,buttons:ButtonContent[]):LineMessageObject{
   const actions=buttons.filter((button)=>button.enabled).map((button)=>({type:'button',style:'primary',action:button.actionType==='URI'
@@ -16,7 +17,7 @@ export function buildCampaignCard(campaign:CampaignContent,buttons:ButtonContent
   return{type:'flex',altText:slice(campaign.title||'Campaign',1500),contents:bubble};
 }
 
-export function buildActivityCard(campaign:{title:string|null;subtitle:string|null},activities:ActivityContent[]):LineMessageObject{
+export function buildActivityCard(campaign:{title:string|null;subtitle:string|null;code?:string},activities:ActivityContent[],claimCode?:string):LineMessageObject{
   const content:Record<string,unknown>[]=[{type:'text',text:campaign.title||'Campaign activities',weight:'bold',size:'xl',wrap:true},
     ...(campaign.subtitle?[{type:'text',text:campaign.subtitle,wrap:true}]:[])];
   for(const activity of activities){
@@ -24,6 +25,8 @@ export function buildActivityCard(campaign:{title:string|null;subtitle:string|nu
     if(activity.description)content.push({type:'text',text:activity.description,wrap:true});
     content.push({type:'button',style:'secondary',action:activity.actionType==='URI'
       ?{type:'uri',label:slice(activity.title,40),uri:activity.actionValue}:{type:'postback',label:slice(activity.title,40),data:activity.actionValue}});
+    if (claimCode && campaign.code) content.push({type:'button',style:'primary',action:{type:'postback',
+      label:slice(`Submit proof: ${activity.title}`,40),data:evidenceRequestPostback(campaign.code,activity.activityKey)}});
   }
   const bubble:Record<string,unknown>={type:'bubble',body:{type:'box',layout:'vertical',spacing:'md',contents:content}};
   assertBubbleSize(bubble);

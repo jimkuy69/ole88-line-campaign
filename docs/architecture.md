@@ -14,6 +14,13 @@ LINE webhook
   -> outbound reply ledger (at-most-once on uncertain reply result)
   -> LINE Messaging API
 
+Image messages with an explicit activity-specific, time-limited upload context
+  -> webhook worker fetches content by LINE message ID
+  -> evidence service validates format/size and writes private storage
+  -> evidence + claim activity + claim state commit transactionally
+  -> protected Admin review queue
+  -> version-checked decision + audit + push notification outbox
+
 Admin browser
   -> same-origin session + CSRF boundary
   -> campaign admin service (versioned transactional writes)
@@ -57,5 +64,5 @@ erDiagram
 - Phase 1: database and reusable domain/application foundation. Only `SINGLE_CLAIM` is supported; other policies are explicitly rejected.
 - Phase 2 (done): follow/welcome and configured claim postback response, including dynamic activity card and conservative outbound status handling.
 - Phase 3 (done): authenticated admin campaign editor, preview, and publishing; secure first-admin bootstrap; draft duplication; version conflicts and audit history.
-- Phase 4: evidence intake and review.
+- Phase 4: activity-scoped evidence intake and Admin review. Review media is only served through a session-protected route. Local filesystem storage is for development/test; production private object storage is not yet implemented. No reward delivery occurs.
 - Phase 5: analytics and optimization.

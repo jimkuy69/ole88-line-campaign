@@ -43,7 +43,7 @@ export class CampaignAdminService {
       campaign: Object.fromEntries(campaignFields.filter((field) => field !== 'status').map((field) => [field, source.campaign[field]])) as CampaignDraft['campaign'],
       buttons: source.buttons.map(({ buttonKey, label, actionType, actionValue, displayOrder, enabled, metadata }) => ({ buttonKey,label,actionType:actionType as 'URI'|'POSTBACK',actionValue,displayOrder,enabled,metadata })),
       activities: source.activities.map(({ activityKey,title,description,actionType,actionValue,displayOrder,required,enabled,metadata }) => ({ activityKey,title,description,actionType:actionType as 'URI'|'POSTBACK',actionValue,displayOrder,required,enabled,metadata })),
-      messages: source.messages.map(({ messageKey,messageType,content,metadata }) => ({ messageKey:messageKey as 'WELCOME_MESSAGE'|'CLAIM_CREATED'|'CLAIM_ALREADY_EXISTS',messageType:messageType as 'TEXT',content,metadata })),
+      messages: source.messages.map(({ messageKey,messageType,content,metadata }) => ({ messageKey:messageKey as CampaignDraft['messages'][number]['messageKey'],messageType:messageType as 'TEXT',content,metadata })),
     };
     draft.campaign.code = code;
     draft.campaign.name = `${source.campaign.name} (copy)`;

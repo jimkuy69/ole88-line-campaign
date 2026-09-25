@@ -8,4 +8,9 @@ describe('claim state machine', () => {
     expect(canTransitionClaim('APPROVED', 'CLAIM_CREATED')).toBe(false);
     expect(() => assertClaimTransition('APPROVED', 'CLAIM_CREATED')).toThrow(DomainError);
   });
+
+  it('allows a rejected claim to resume the proof workflow but never treats it as reward delivery', () => {
+    expect(canTransitionClaim('REJECTED','IN_PROGRESS')).toBe(true);
+    expect(canTransitionClaim('REJECTED','REWARD_SENT')).toBe(false);
+  });
 });

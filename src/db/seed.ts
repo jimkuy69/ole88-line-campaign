@@ -36,6 +36,15 @@ async function seed() {
       ['WELCOME_MESSAGE', 'Welcome to this example campaign.'],
       ['CLAIM_CREATED', 'Your claim was created.'],
       ['CLAIM_ALREADY_EXISTS', 'You already have a claim in this campaign.'],
+      ['CLAIM_STATUS_IN_PROGRESS','Your campaign activities are in progress.'],
+      ['CLAIM_STATUS_UNDER_REVIEW','Your evidence is waiting for review.'],
+      ['CLAIM_STATUS_APPROVED','Your required activities were approved. Reward delivery is handled separately.'],
+      ['CLAIM_STATUS_REJECTED','Evidence was rejected. Please review the note and submit it again.'],
+      ['EVIDENCE_SELECT_ACTIVITY','Choose the activity you are submitting proof for.'],
+      ['EVIDENCE_UPLOAD_PROMPT','Send one JPEG or PNG image, up to 10 MB, for this activity.'],
+      ['EVIDENCE_RECEIVED','We received your evidence.'],['EVIDENCE_PENDING','It is waiting for Admin review.'],
+      ['EVIDENCE_INVALID','That image could not be accepted. Send a JPEG or PNG image under 10 MB.'],
+      ['EVIDENCE_APPROVED','Your activity evidence was approved.'],['EVIDENCE_REJECTED','Your activity evidence was rejected: {{reason}}'],
     ].map(([messageKey, content]) => ({
       campaignId: campaign.id, messageKey: messageKey!, messageType: 'TEXT', content: content!,
     }))).onConflictDoNothing();

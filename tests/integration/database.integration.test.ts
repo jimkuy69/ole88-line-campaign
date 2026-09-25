@@ -14,6 +14,11 @@ import * as schema from '../../src/db/schema.js';
 import { AdminAuthService, sha256 } from '../../src/modules/admin/admin-auth-service.js';
 import { buildServer } from '../../src/server.js';
 import { loadConfig } from '../../src/config/env.js';
+import { EvidenceService } from '../../src/modules/evidence/evidence-service.js';
+import { FileSystemEvidenceStorage } from '../../src/modules/evidence/storage.js';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const parsedDatabaseUrl = databaseUrl ? new URL(databaseUrl) : null;
@@ -57,6 +62,114 @@ integration('PostgreSQL foundation constraints', () => {
     const [user] = await db.insert(schema.users).values({}).returning();
     await db.insert(schema.channelIdentities).values({ userId: user!.id, channel: 'LINE', externalUserId: 'line-user-1' });
     await expect(db.insert(schema.channelIdentities).values({ userId: user!.id, channel: 'LINE', externalUserId: 'line-user-1' })).rejects.toThrow();
+  });
+
+  it('ingests image evidence only for the selected owned claim activity, deduplicates LINE message IDs, and resumes after rejection', async () => {
+    const [campaign]=await db.insert(schema.campaigns).values({code:'EVIDENCE_FLOW',name:'Evidence flow',templateType:'ACTIVITY'}).returning();
+    const [activities]=[await db.insert(schema.campaignActivities).values([
+      {campaignId:campaign!.id,activityKey:'A',title:'Activity A',actionType:'URI',actionValue:'https://example.org/a',required:true,enabled:true},
+      {campaignId:campaign!.id,activityKey:'B',title:'Activity B',actionType:'URI',actionValue:'https://example.org/b',required:true,enabled:true},
+    ]).returning()];
+    await db.insert(schema.campaignMessages).values([
+      {campaignId:campaign!.id,messageKey:'EVIDENCE_APPROVED',messageType:'TEXT',content:'Approved.'},
+      {campaignId:campaign!.id,messageKey:'EVIDENCE_REJECTED',messageType:'TEXT',content:'Rejected: {{reason}}'},
+    ]);
+    const [user]=await db.insert(schema.users).values({}).returning();
+    await db.update(schema.campaigns).set({status:'ACTIVE'}).where(eq(schema.campaigns.id,campaign!.id));
+    const [identity]=await db.insert(schema.channelIdentities).values({userId:user!.id,channel:'LINE',externalUserId:'line-evidence-owner'}).returning();
+    const [claim]=await db.insert(schema.claims).values({userId:user!.id,campaignId:campaign!.id,claimCode:'EVID-CLAIM',status:'CLAIM_CREATED'}).returning();
+    const progress=await db.insert(schema.claimActivities).values(activities.map((activity)=>({claimId:claim!.id,campaignActivityId:activity.id}))).returning();
+    const scratch=await mkdtemp(join(tmpdir(),'ole88-evidence-'));
+    const bytes=Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a,1,2,3]);
+    const storage=new FileSystemEvidenceStorage(scratch);
+    let failDownload=false;
+    const service=new EvidenceService(db,{getMessageContent:async()=>{if(failDownload)throw new Error('temporary download failure');return{contentType:'image/png',data:bytes}}},storage);
+    try {
+      await expect(service.receiveImage('line-evidence-owner','unknown-image','no-activity')).resolves.toMatchObject({kind:'no_context'});
+      await expect(service.requestUploadContext('line-other','EVIDENCE_FLOW','A','request-wrong-owner')).rejects.toMatchObject({code:'CLAIM_NOT_FOUND'});
+      await service.requestUploadContext('line-evidence-owner','EVIDENCE_FLOW','A','request-a');
+      await expect(service.receiveImage('line-someone-else','image-owner-check','wrong-user')).resolves.toMatchObject({kind:'no_context'});
+      failDownload=true;
+      await expect(service.receiveImage('line-evidence-owner','image-retry','event-download-failure')).rejects.toThrow('temporary download failure');
+      expect(await service.currentContext('line-evidence-owner')).not.toBeNull();
+      failDownload=false;
+      const accepted=await service.receiveImage('line-evidence-owner','image-one','event-one');
+      expect(accepted).toMatchObject({kind:'accepted',evidence:{claimActivityId:progress[0]!.id,channelIdentityId:identity!.id,status:'SUBMITTED'}});
+      if(accepted.kind!=='accepted')throw new Error('Expected evidence acceptance');
+      expect(await service.receiveImage('line-evidence-owner','image-one','event-redelivery')).toMatchObject({kind:'duplicate'});
+      expect(await db.select().from(schema.evidence)).toHaveLength(1);
+      const wrongOwner=await db.insert(schema.users).values({}).returning();
+      await db.insert(schema.channelIdentities).values({userId:wrongOwner[0]!.id,channel:'LINE',externalUserId:'line-intruder'});
+      await expect(service.receiveImage('line-intruder','image-one','other-event')).rejects.toMatchObject({code:'EVIDENCE_OWNER_MISMATCH'});
+      await expect(service.decide(accepted.evidence.id,'admin-id','REJECTED',accepted.evidence.version,'Unreadable proof'))
+        .resolves.toMatchObject({claimStatus:'REJECTED'});
+      const rejected=(await db.select().from(schema.claims).where(eq(schema.claims.id,claim!.id)))[0]!;
+      expect(rejected.status).toBe('REJECTED');
+      const oldEvidence=(await db.select().from(schema.evidence).where(eq(schema.evidence.id,accepted.evidence.id)))[0]!;
+      expect(oldEvidence).toMatchObject({status:'REJECTED',reviewReason:'Unreadable proof'});
+      await service.requestUploadContext('line-evidence-owner','EVIDENCE_FLOW','A','request-a-again');
+      const replacement=await service.receiveImage('line-evidence-owner','image-two','event-two');
+      expect(replacement).toMatchObject({kind:'accepted',evidence:{claimActivityId:progress[0]!.id}});
+      if(replacement.kind!=='accepted')throw new Error('Expected replacement evidence');
+      await service.requestUploadContext('line-evidence-owner','EVIDENCE_FLOW','B','request-b');
+      const second=await service.receiveImage('line-evidence-owner','image-three','event-three');
+      expect(second).toMatchObject({kind:'accepted',evidence:{claimActivityId:progress[1]!.id}});
+      if(second.kind!=='accepted')throw new Error('Expected second required activity evidence');
+      await service.decide(replacement.evidence.id,'admin-id','APPROVED',replacement.evidence.version);
+      expect((await db.select().from(schema.claims).where(eq(schema.claims.id,claim!.id)))[0]!.status).not.toBe('APPROVED');
+      await service.decide(second.evidence.id,'admin-id','APPROVED',second.evidence.version);
+      expect((await db.select().from(schema.claims).where(eq(schema.claims.id,claim!.id)))[0]!.status).toBe('APPROVED');
+      expect((await db.select().from(schema.claims).where(eq(schema.claims.id,claim!.id)))[0]!.status).not.toBe('REWARD_SENT');
+      const retryKeys:string[]=[];
+      const pushWorker=new WebhookEventProcessor(db,{sendReply:async()=>undefined,sendToUser:async(_user,_messages,retryKey)=>{retryKeys.push(retryKey!)} });
+      await pushWorker.processReadyPushes();
+      const notifications=await db.select().from(schema.outboundMessages).where(eq(schema.outboundMessages.deliveryType,'PUSH'));
+      expect(notifications).toHaveLength(3);
+      expect(notifications.every((row)=>row.status==='SENT'&&row.retryKey&&row.lineRequestId===null)).toBe(true);
+      expect(new Set(retryKeys).size).toBe(3);
+      expect(notifications.map((row)=>row.retryKey).sort()).toEqual([...retryKeys].sort());
+    } finally { await rm(scratch,{recursive:true,force:true}); }
+  });
+
+  it('deduplicates concurrent evidence event processing and version-checks competing Admin decisions', async () => {
+    const [campaign]=await db.insert(schema.campaigns).values({code:'EVIDENCE_RACE',name:'Evidence race',templateType:'ACTIVITY'}).returning();
+    const [activity]=await db.insert(schema.campaignActivities).values({campaignId:campaign!.id,activityKey:'CHECK',title:'Check',actionType:'URI',actionValue:'https://example.org',required:true,enabled:true}).returning();
+    const [user]=await db.insert(schema.users).values({}).returning();
+    await db.update(schema.campaigns).set({status:'ACTIVE'}).where(eq(schema.campaigns.id,campaign!.id));
+    const [identity]=await db.insert(schema.channelIdentities).values({userId:user!.id,channel:'LINE',externalUserId:'line-evidence-race'}).returning();
+    const [claim]=await db.insert(schema.claims).values({userId:user!.id,campaignId:campaign!.id,claimCode:'RACE-CLAIM',status:'CLAIM_CREATED'}).returning();
+    const [progress]=await db.insert(schema.claimActivities).values({claimId:claim!.id,campaignActivityId:activity!.id}).returning();
+    const [row]=await db.insert(schema.evidence).values({claimId:claim!.id,claimActivityId:progress!.id,userId:user!.id,channelIdentityId:identity!.id,
+      type:'image/png',storageKey:'a'.repeat(64)+'.png',sourceMessageId:'seed-image-id',status:'SUBMITTED',version:1}).returning();
+    const service=new EvidenceService(db,{getMessageContent:async()=>({contentType:'image/png',data:Buffer.alloc(0)})},new FileSystemEvidenceStorage(join(tmpdir(),'unused-evidence')));
+    const decisions=await Promise.allSettled([
+      service.decide(row!.id,'admin-one','APPROVED',1),
+      service.decide(row!.id,'admin-two','REJECTED',1,'Not eligible'),
+    ]);
+    expect(decisions.filter((result)=>result.status==='fulfilled')).toHaveLength(1);
+    expect(decisions.filter((result)=>result.status==='rejected')).toHaveLength(1);
+    expect(decisions.find((result)=>result.status==='rejected')).toMatchObject({reason:{code:'EVIDENCE_VERSION_CONFLICT'}});
+    expect(await db.select().from(schema.auditLogs).where(eq(schema.auditLogs.entityId,row!.id))).toHaveLength(1);
+  });
+
+  it('protects evidence media and review actions behind Admin authentication and CSRF', async () => {
+    const app=buildServer(loadConfig({NODE_ENV:'test',DATABASE_URL:databaseUrl!}),db);
+    try {
+      const denied=await app.inject({method:'GET',url:'/api/admin/reviews'});
+      expect(denied.statusCode).toBe(401);
+      const image=await app.inject({method:'GET',url:'/api/admin/evidence/not-an-id/content'});
+      expect(image.statusCode).toBe(401);
+      const post=await app.inject({method:'POST',url:'/api/admin/reviews/not-an-id/approve',payload:{expectedVersion:1}});
+      expect(post.statusCode).toBe(401);
+      await new AdminAuthService(db).createFirstAdmin('reviewer','A safe review passphrase!');
+      const login=await app.inject({method:'POST',url:'/api/admin/login',payload:{username:'reviewer',password:'A safe review passphrase!'}});
+      const cookieHeader=login.headers['set-cookie'];const cookie=Array.isArray(cookieHeader)?cookieHeader[0]!:cookieHeader!;
+      const headers={cookie:cookie.split(';')[0]!};
+      const missingCsrf=await app.inject({method:'POST',url:'/api/admin/reviews/not-an-id/approve',headers,payload:{expectedVersion:1}});
+      expect(missingCsrf.statusCode).toBe(403);
+      const queue=await app.inject({method:'GET',url:'/api/admin/reviews',headers});
+      expect(queue.statusCode).toBe(200);
+    } finally { await app.close(); }
   });
 
   it('runs the authenticated campaign-manager workflow, auditing mutations and rejecting stale edits', async () => {
@@ -297,7 +410,7 @@ integration('PostgreSQL foundation constraints', () => {
 
   it('builds an activity card from data instead of campaign-specific rules', () => {
     const card = buildActivityCard({ title: 'Dynamic', subtitle: null }, [
-      { title: 'Task', description: null, actionType: 'URI', actionValue: 'https://example.org' },
+      { activityKey:'TASK',title: 'Task', description: null, actionType: 'URI', actionValue: 'https://example.org' },
     ]);
     expect(card).toMatchObject({ type: 'flex', contents: { type: 'bubble' } });
   });

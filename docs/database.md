@@ -15,7 +15,8 @@ The Drizzle schema is in `src/db/schema.ts`; versioned migrations are in `drizzl
 | `campaign_messages` | Campaign response text keyed by message role | Unique `(campaign_id, message_key)` |
 | `claims` | Per-user participation and current status | Unique `(user_id, campaign_id)` for the current single-claim policy |
 | `claim_activities` | Per-claim activity progress | Unique `(claim_id, campaign_activity_id)` |
-| `evidence` | Evidence storage reference and review state | Indexed by claim/time |
+| `evidence` | Evidence storage reference, source LINE message dedupe ID, verified LINE identity + claim-activity links, versioned review state and reason | Unique source message ID; indexed by claim/time and status/time |
+| `evidence_upload_contexts` | Short-lived selection binding between LINE identity, exact claim, and claim activity | One current selection per LINE identity; indexed by expiry |
 | `tracking_events` | Provider-neutral interaction events | Indexed by campaign/time |
 | `audit_logs` | Actor and entity change record | Indexed by entity/time |
 | `webhook_events` | Durable inbound event inbox | Unique `(channel, provider_event_id)`; attempt timing and lease timestamps; indexed by status/next attempt |
@@ -25,11 +26,13 @@ Migration `0003_campaign_content_lock.sql` adds triggers that lock the parent ca
 
 Migration `0004_sour_husk.sql` adds the Admin identity/session/login attempt tables and `campaigns.version`. Migration `0005_sleepy_bug.sql` creates a partial unique index enforcing at most one ACTIVE campaign, matching the Phase 2 webhook selector. Admin graph saves, publish/pause transitions, and their audit records are transactional; the parent row lock and `version` check reject concurrent/stale writes. Activity IDs are preserved during edits, and an activity referenced by a claim cannot be removed.
 
+Migration `0006_sour_dreadnoughts.sql` adds selected-activity evidence contexts, explicit evidence-to-activity and LINE identity references, source message uniqueness, review version/reason fields, and reply/push outbox type. Migration `0007_clean_dorian_gray.sql` adds a durable unique push retry key distinct from LINE's response request ID. Nullable evidence links only preserve old records; new submissions always bind both links. Legacy unlinked evidence is intentionally excluded from the Admin queue/media route until reconciled. `REJECTED` evidence remains in history; resubmission creates a new row with a new LINE message ID. Reviews update evidence, claim activity and Claim state, audit log, and push outbox in one transaction.
+
 The seed campaign uses only example copy and null action destinations. Only its claim action is configured; other buttons and activities are disabled until real destinations are supplied. It remains `DRAFT` and fails publish validation until completed.
 
 ## Data handling
 
-Webhook payload JSON is retained so later processing can resume after restarts. It can include user content and identifiers. Define and implement a retention/deletion policy before production deployment; do not log payloads or secrets. Evidence binaries belong in configured object storage, with only a storage key in PostgreSQL.
+Webhook payload JSON is retained so later processing can resume after restarts. It can include user content and identifiers. Do not log payloads, evidence bytes, secrets, or tokens. Evidence binaries are kept out of PostgreSQL. `FileSystemEvidenceStorage` is a private local development/test adapter. Production object storage is not implemented. The `evidence:purge` CLI removes reviewed files and rows older than `EVIDENCE_RETENTION_DAYS` (default 180); pending evidence is kept. Schedule the command only after choosing a production storage adapter and retention schedule.
 
 ## Migrations
 

@@ -26,6 +26,7 @@ stateDiagram-v2
   UNDER_REVIEW --> APPROVED
   UNDER_REVIEW --> REJECTED
   APPROVED --> REWARD_SENT
+  REJECTED --> IN_PROGRESS : corrected evidence resubmission
 ```
 
-`REJECTED`, `REWARD_SENT`, `EXPIRED`, and `CANCELLED` are terminal in this foundation. Invalid transitions throw `DomainError` with code `INVALID_CLAIM_TRANSITION`.
+`REWARD_SENT`, `EXPIRED`, and `CANCELLED` are terminal. A rejected claim can resume `IN_PROGRESS` when a customer selects an eligible activity and starts a new upload context. The previous rejected evidence and reason remain in history. Approval occurs only after every enabled required claim activity is approved. Approving proof does not send or record a reward; `REWARD_SENT` is outside Phase 4. Invalid transitions throw `DomainError` with code `INVALID_CLAIM_TRANSITION`.
