@@ -87,8 +87,11 @@ export function registerAdminRoutes(app:FastifyInstance, db:Db, isProduction:boo
     return campaigns.preview(normalizeDraft(data.data));
   }));
   app.post('/api/admin/campaigns/:id/publish',(req,rep)=>route(req,rep,async(session)=>{
-    const data=z.object({expectedVersion:z.number().int().positive()}).safeParse(body(req));if(!data.success)return rep.code(400).send({error:'Invalid input.'});
-    return campaigns.publish((req.params as {id:string}).id,session.user.id,data.data.expectedVersion);
+    const data=z.object({expectedVersion:z.number().int().positive(),draft:templateDraftSchema.optional()}).safeParse(body(req));if(!data.success)return rep.code(400).send({error:'Invalid input.',details:data.error.issues});
+    const id=(req.params as {id:string}).id;
+    return data.data.draft
+      ? campaigns.saveAndPublish(id,normalizeDraft(data.data.draft),data.data.expectedVersion,session.user.id)
+      : campaigns.publish(id,session.user.id,data.data.expectedVersion);
   }));
   app.post('/api/admin/campaigns/:id/pause',(req,rep)=>route(req,rep,async(session)=>{
     const data=z.object({expectedVersion:z.number().int().positive()}).safeParse(body(req));if(!data.success)return rep.code(400).send({error:'Invalid input.'});
@@ -114,7 +117,7 @@ function normalizeDraft<T extends {campaign:{heroImage:string|null;rewardType:st
 function sendError(reply:FastifyReply,error:unknown) {
   const e=error as {code?:string;message?:string;constraint?:string};
   if(e.code==='CAMPAIGN_NOT_PUBLISHABLE')return reply.code(422).send({error:e.message,issues:(error as {details?:unknown}).details??[]});
-  const known=new Map([['CAMPAIGN_NOT_FOUND',404],['TEMPLATE_NOT_FOUND',404],['ACTIVE_CAMPAIGN_IMMUTABLE',409],['CAMPAIGN_VERSION_CONFLICT',409],['CAMPAIGN_PUBLISH_CONFLICT',409],['CAMPAIGN_NOT_ACTIVE',409],['ACTIVITY_IN_USE',409],['ANOTHER_CAMPAIGN_ACTIVE',409],['CAMPAIGN_NOT_PUBLISHABLE',422]]);
+  const known=new Map([['CAMPAIGN_NOT_FOUND',404],['TEMPLATE_NOT_FOUND',404],['ACTIVE_CAMPAIGN_IMMUTABLE',409],['CAMPAIGN_ALREADY_ACTIVE',409],['CAMPAIGN_VERSION_CONFLICT',409],['CAMPAIGN_PUBLISH_CONFLICT',409],['CAMPAIGN_NOT_ACTIVE',409],['ACTIVITY_IN_USE',409],['ANOTHER_CAMPAIGN_ACTIVE',409],['CAMPAIGN_NOT_PUBLISHABLE',422]]);
   const status=e.code?known.get(e.code):undefined;
   if(status)return reply.code(status).send({error:e.message,code:e.code});
   if(e.code==='23505')return reply.code(409).send({error:'A campaign with this code already exists.'});

@@ -1,4 +1,4 @@
-import { desc, asc, eq } from 'drizzle-orm';
+import { desc, asc, eq, and, ne, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import * as schema from '../../db/schema.js';
 import { DomainError } from '../../domain/errors.js';
@@ -80,6 +80,64 @@ export class CampaignAdminService {
     if (expectedVersion !== undefined && current.version !== expectedVersion) throw new DomainError('Campaign changed since it was opened.', 'CAMPAIGN_VERSION_CONFLICT');
     const campaign = await this.campaigns.publishCampaign(id, actorId, expectedVersion);
     return campaign;
+  }
+
+  async saveAndPublish(id: string, input: CampaignDraft, expectedVersion: number, actorId: string) {
+    return this.db.transaction(async (tx) => {
+      const [current] = await tx.select().from(schema.campaigns).where(eq(schema.campaigns.id, id)).for('update').limit(1);
+      if (!current) throw new DomainError('Campaign not found', 'CAMPAIGN_NOT_FOUND');
+      if (current.status === 'ACTIVE') throw new DomainError('Campaign is already active.', 'CAMPAIGN_ALREADY_ACTIVE');
+      if (current.version !== expectedVersion) throw new DomainError('Campaign changed since it was opened.', 'CAMPAIGN_VERSION_CONFLICT');
+
+      const normalizedButtons = input.buttons.map((item) => item.buttonKey === 'BTN_CLAIM'
+        ? { ...item, actionType: 'POSTBACK', actionValue: campaignButtonPostback(input.campaign.code, 'BTN_CLAIM') } : item);
+      await tx.update(schema.campaigns).set({ ...input.campaign,
+        startAt: input.campaign.startAt ? new Date(input.campaign.startAt) : null,
+        endAt: input.campaign.endAt ? new Date(input.campaign.endAt) : null,
+        claimPolicy: input.campaign.claimPolicy ?? 'SINGLE_CLAIM', status: 'DRAFT', version: current.version + 1, updatedAt: new Date(),
+      }).where(eq(schema.campaigns.id, id));
+      await tx.delete(schema.campaignButtons).where(eq(schema.campaignButtons.campaignId, id));
+      await tx.delete(schema.campaignMessages).where(eq(schema.campaignMessages.campaignId, id));
+      if (normalizedButtons.length) await tx.insert(schema.campaignButtons).values(normalizedButtons.map((item) => ({ ...item, campaignId: id })));
+
+      const existing = await tx.select().from(schema.campaignActivities).where(eq(schema.campaignActivities.campaignId, id)).for('update');
+      const wanted = new Set(input.activities.map((item) => item.activityKey));
+      for (const old of existing) if (!wanted.has(old.activityKey)) {
+        const [usage] = await tx.select({ id: schema.claimActivities.id }).from(schema.claimActivities)
+          .where(eq(schema.claimActivities.campaignActivityId, old.id)).limit(1);
+        if (usage) throw new DomainError(`Activity ${old.activityKey} is already referenced by a claim and cannot be removed.`, 'ACTIVITY_IN_USE');
+        await tx.delete(schema.campaignActivities).where(eq(schema.campaignActivities.id, old.id));
+      }
+      for (const item of input.activities) {
+        const match = existing.find((old) => old.activityKey === item.activityKey);
+        if (match) await tx.update(schema.campaignActivities).set({ ...item, updatedAt: new Date() }).where(eq(schema.campaignActivities.id, match.id));
+        else await tx.insert(schema.campaignActivities).values({ ...item, campaignId: id });
+      }
+      if (input.messages.length) await tx.insert(schema.campaignMessages).values(input.messages.map((item) => ({ ...item, campaignId: id })));
+
+      const [savedCampaign] = await tx.select().from(schema.campaigns).where(eq(schema.campaigns.id, id));
+      const buttons = await tx.select().from(schema.campaignButtons).where(eq(schema.campaignButtons.campaignId, id));
+      const activities = await tx.select().from(schema.campaignActivities).where(eq(schema.campaignActivities.campaignId, id));
+      const messages = await tx.select().from(schema.campaignMessages).where(eq(schema.campaignMessages.campaignId, id));
+      const issues = validateCampaignForPublishDetailed(savedCampaign!, buttons, activities, messages);
+      if (issues.length) throw new DomainError(`Campaign cannot be published: ${issues.map((issue) => issue.message).join(' ')}`, 'CAMPAIGN_NOT_PUBLISHABLE', issues);
+
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(881288, 1)`);
+      const [anotherActive] = await tx.select({ id: schema.campaigns.id }).from(schema.campaigns)
+        .where(and(eq(schema.campaigns.status, 'ACTIVE'), ne(schema.campaigns.id, id))).limit(1);
+      if (anotherActive) throw new DomainError('Pause the active campaign before publishing another.', 'ANOTHER_CAMPAIGN_ACTIVE');
+
+      const [published] = await tx.update(schema.campaigns).set({ status: 'ACTIVE', version: current.version + 2, updatedAt: new Date() })
+        .where(eq(schema.campaigns.id, id)).returning();
+      await tx.insert(schema.auditLogs).values([
+        { actorType: 'ADMIN', actorId, action: 'CAMPAIGN_UPDATED', entityType: 'CAMPAIGN', entityId: id,
+          beforeData: { status: current.status, version: current.version },
+          afterData: { status: 'DRAFT', version: current.version + 1, buttonCount: input.buttons.length, activityCount: input.activities.length },
+          metadata: { buttonKeys: input.buttons.map((item) => item.buttonKey), activityKeys: input.activities.map((item) => item.activityKey), messageKeys: input.messages.map((item) => item.messageKey) } },
+        { actorType: 'ADMIN', actorId, action: 'CAMPAIGN_PUBLISHED', entityType: 'CAMPAIGN', entityId: id, metadata: { version: published!.version } },
+      ]);
+      return published!;
+    });
   }
   async pause(id: string, actorId: string, expectedVersion?: number) {
     return this.db.transaction(async (tx) => {

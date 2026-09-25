@@ -154,6 +154,61 @@ integration('PostgreSQL foundation constraints', () => {
     } finally {await app.close();}
   });
 
+  it('publishes the exact edited preview graph and rejects a stale publish from another window', async () => {
+    await new AdminAuthService(db).createFirstAdmin('publisher','Publish safe passphrase!');
+    const app=buildServer(loadConfig({NODE_ENV:'test',DATABASE_URL:databaseUrl!}),db);
+    try {
+      const login=await app.inject({method:'POST',url:'/api/admin/login',payload:{username:'publisher',password:'Publish safe passphrase!'}});
+      const cookieHeader=login.headers['set-cookie'];const cookie=Array.isArray(cookieHeader)?cookieHeader[0]!:cookieHeader!;
+      const headers={cookie:cookie.split(';')[0]!, 'x-csrf-token':(login.json() as {csrfToken:string}).csrfToken};
+
+      const created=await app.inject({method:'POST',url:'/api/admin/campaigns',headers,payload:{templateId:'welcome-claim',code:'PUBLISH_LATEST'}});
+      const id=(created.json() as {campaign:{id:string}}).campaign.id;
+      const detail=await app.inject({method:'GET',url:`/api/admin/campaigns/${id}`,headers});
+      const draft=editable(detail.json());
+      draft.campaign.title='Latest title before Publish';
+      draft.buttons[0]!.label='รับรางวัลล่าสุด';
+      draft.activities[0]!.actionValue='https://example.org/latest-destination';
+      draft.messages.find((message)=>message.messageKey==='WELCOME_MESSAGE')!.content='Welcome copy edited immediately before Publish.';
+
+      const preview=await app.inject({method:'POST',url:'/api/admin/campaigns/preview',headers,payload:draft});
+      expect(preview.statusCode).toBe(200);
+      expect(preview.json().issues).toHaveLength(0);
+      expect(JSON.stringify(preview.json().welcomeMessages)).toContain('Latest title before Publish');
+      expect(JSON.stringify(preview.json().welcomeMessages)).toContain('รับรางวัลล่าสุด');
+      expect(JSON.stringify(preview.json().welcomeMessages)).toContain('Welcome copy edited immediately before Publish.');
+      expect(JSON.stringify(preview.json().claimMessages)).toContain('https://example.org/latest-destination');
+
+      const published=await app.inject({method:'POST',url:`/api/admin/campaigns/${id}/publish`,headers,payload:{expectedVersion:1,draft}});
+      expect(published.statusCode,published.body).toBe(200);
+      expect(published.json()).toMatchObject({status:'ACTIVE',title:'Latest title before Publish'});
+      const persisted=await app.inject({method:'GET',url:`/api/admin/campaigns/${id}`,headers});
+      const stored=persisted.json() as {campaign:Record<string,unknown>;buttons:Array<Record<string,unknown>>;activities:Array<Record<string,unknown>>;messages:Array<Record<string,unknown>>};
+      expect(stored.campaign.title).toBe('Latest title before Publish');
+      expect(stored.buttons[0]!.label).toBe('รับรางวัลล่าสุด');
+      expect(stored.activities[0]!.actionValue).toBe('https://example.org/latest-destination');
+      expect(stored.messages.find((message)=>message.messageKey==='WELCOME_MESSAGE')!.content).toBe('Welcome copy edited immediately before Publish.');
+
+      const second=await app.inject({method:'POST',url:'/api/admin/campaigns',headers,payload:{templateId:'welcome-claim',code:'STALE_PUBLISH'}});
+      const secondId=(second.json() as {campaign:{id:string}}).campaign.id;
+      const staleDetail=await app.inject({method:'GET',url:`/api/admin/campaigns/${secondId}`,headers});
+      const staleDraft=editable(staleDetail.json());
+      const otherWindowDraft=structuredClone(staleDraft);
+      otherWindowDraft.campaign.title='Saved from another window';
+      const otherWindowSave=await app.inject({method:'PUT',url:`/api/admin/campaigns/${secondId}`,headers,payload:{expectedVersion:1,draft:otherWindowDraft}});
+      expect(otherWindowSave.statusCode).toBe(200);
+
+      staleDraft.campaign.title='Unsaved stale window title';
+      staleDraft.messages.find((message)=>message.messageKey==='WELCOME_MESSAGE')!.content='Unsaved stale window message';
+      const stalePublish=await app.inject({method:'POST',url:`/api/admin/campaigns/${secondId}/publish`,headers,payload:{expectedVersion:1,draft:staleDraft}});
+      expect(stalePublish.statusCode).toBe(409);
+      const afterConflict=await app.inject({method:'GET',url:`/api/admin/campaigns/${secondId}`,headers});
+      expect(afterConflict.json().campaign).toMatchObject({status:'DRAFT',title:'Saved from another window',version:2});
+      expect(afterConflict.json().messages.find((message:{messageKey:string})=>message.messageKey==='WELCOME_MESSAGE')!.content)
+        .not.toBe('Unsaved stale window message');
+    } finally {await app.close();}
+  });
+
   it('enforces one claim across concurrent requests', async () => {
     const campaignService = new CampaignService(db);
     const [campaign] = await db.insert(schema.campaigns).values({
