@@ -98,6 +98,20 @@
     'Secondary campaign image preview': 'ตัวอย่างรูปภาพแคมเปญภาพที่สอง',
     'The supplied images are hosted on this staging site. Add image URLs over HTTPS; saving remains a separate action.':
       'ภาพที่เตรียมไว้โฮสต์บน staging นี้ กรอก URL ภาพผ่าน HTTPS; การบันทึกยังต้องกดแยกต่างหาก',
+    'Image hotspot planner · design and export': 'เครื่องมือวางพื้นที่แตะบนภาพ · ออกแบบและส่งออก',
+    'Add up to four HTTPS images, choose an existing enabled button or activity, then drag a rectangle over its touch area. These saved coordinates are a design plan only; the current LINE message renderer does not send image hotspots.':
+      'เพิ่มภาพ HTTPS ได้สูงสุด 4 ภาพ เลือกปุ่มหรือกิจกรรมที่เปิดใช้อยู่ แล้วลากกรอบบนพื้นที่แตะ พิกัดที่บันทึกเป็นแผนออกแบบเท่านั้น ระบบ LINE ปัจจุบันยังไม่ส่งพื้นที่แตะบนภาพ',
+    'Add image to map': 'เพิ่มภาพในแผนผัง',
+    'Export hotspot plan JSON': 'ส่งออกแผนพื้นที่แตะเป็น JSON',
+    'Remove image': 'เอาภาพออก',
+    'Bind new area to': 'ผูกพื้นที่ใหม่กับ',
+    'Enable a button or activity first': 'เปิดใช้ปุ่มหรือกิจกรรมก่อน',
+    'Image could not be loaded. Check that its HTTPS URL is publicly reachable.':
+      'โหลดภาพไม่ได้ โปรดตรวจว่า URL HTTPS เปิดให้เข้าถึงได้',
+    'Enter a public HTTPS image URL to display it here.': 'กรอก URL ภาพ HTTPS ที่เปิดสาธารณะเพื่อแสดงที่นี่',
+    'Draw hotspot area': 'วาดพื้นที่แตะ',
+    'Drawing enabled · drag on image': 'เปิดโหมดวาด · ลากบนภาพ',
+    'Delete area': 'ลบพื้นที่',
     'https://…': 'https://…',
     'Image upload is not configured. Use an HTTPS image URL publicly reachable by LINE; the editor only previews it locally.':
       'ยังไม่ได้ตั้งค่าการอัปโหลดรูปภาพ โปรดใช้ URL HTTPS ที่ LINE เข้าถึงได้ รูปตัวอย่างในหน้านี้แสดงเฉพาะในเครื่อง',

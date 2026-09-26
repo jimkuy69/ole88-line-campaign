@@ -21,9 +21,13 @@ The preview uses the same `buildCampaignCard` and `buildActivityCard` renderer a
 
 ## Images and LINE constraints
 
-Image upload is not configured. Store an HTTPS image URL in the campaign; the browser displays a preview. The application does not fetch the URL server-side. The URL must be publicly reachable by LINE when a campaign is sent. LINE documents Flex image URLs as HTTPS (TLS 1.2+), JPEG/PNG, no more than 1024 × 1024 pixels and 10 MB, with URL length up to 2000 characters. The app validates HTTPS and URL length but cannot prove image format, dimensions, size, or public reachability without a real remote check.
+Image upload is not configured. Store an HTTPS image URL in the campaign; the browser displays a preview. The application does not fetch the URL server-side. The URL must be publicly reachable by LINE when a campaign is sent.
 
-The renderer caps the Flex bubble JSON at 30 KB, the alt text at LINE's 1500-character maximum, postback data at 300 characters, and reply payloads at five message objects. Flex action labels are rendered to at most 40 characters. URI actions are restricted by this application to HTTPS and 1000 characters. The current sample project has no real LINE credentials and does not call LINE's message-validation endpoint; use LINE's official validator after channel credentials are configured, before live messaging.
+The Admin image-hotspot planner accepts up to four HTTPS image URLs, lets an administrator draw normalized rectangular areas (0–1000 coordinate scale), and binds each area to an enabled campaign button or activity. The draft stores this configuration at `campaign.settings.imageHotspots`; Export downloads an `ole88-image-hotspot-plan/v1` JSON file with area coordinates and the referenced action identity/value. Draft validation rejects out-of-bounds areas and missing/disabled targets. **This is currently a design/export aid only:** the LINE campaign renderer does not emit Imagemap messages from these hotspots. LINE Imagemap actions have provider-specific constraints and do not directly support LINE postback actions; do not treat the exported plan as deployed behavior or publish until a separate runtime integration is implemented and tested. Current campaign images remain HTTPS URLs rendered through Flex.
+
+LINE documents Flex image URLs as HTTPS (TLS 1.2+), JPEG/PNG, no more than 1024 × 1024 pixels and 10 MB, with URL length up to 2000 characters. The app validates HTTPS and URL length but cannot prove image format, dimensions, size, or public reachability without a real remote check.
+
+The renderer caps the Flex bubble JSON at 30 KB, the alt text at LINE's 1500-character maximum, postback data at 300 characters, and reply payloads at five message objects. Flex action labels are rendered to at most 40 characters. URI actions are restricted by this application to HTTPS and 1000 characters. Automated tests do not call LINE's message-validation endpoint; use LINE's official validator before live messaging.
 
 Official references: [LINE Messaging API reference](https://developers.line.biz/en/reference/messaging-api/nojs/) and [Retrying API requests](https://developers.line.biz/en/docs/messaging-api/retrying-api-request/). LINE retry keys are documented for push, multicast, narrowcast, and broadcast calls; reply messages are not included, so Phase 2 keeps uncertain reply-token sends quarantined.
 
@@ -48,4 +52,4 @@ $env:TEST_DATABASE_URL='postgres://user@127.0.0.1:5432/ole88_test'
 npm test
 ```
 
-Admin user management beyond secure creation of the first administrator is not exposed in this phase. Image uploads, live LINE validation, production deployment, and Phase 4/5 are out of scope. A campaign can contain up to 200 activities in the editor API, but the actual rendered Flex card is bounded by LINE's 30 KB bubble limit; preview/publish validation reports the activity field when rendering exceeds it.
+Admin user management beyond secure creation of the first administrator is not exposed in this phase. Image uploads, Imagemap runtime delivery, live LINE validation, production deployment, and Phase 4/5 are out of scope. A campaign can contain up to 200 activities in the editor API, but the actual rendered Flex card is bounded by LINE's 30 KB bubble limit; preview/publish validation reports the activity field when rendering exceeds it.

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { imageHotspotMapsSchema, validateImageHotspotTargets } from '../campaigns/image-hotspots.js';
 
 export const CAMPAIGN_MESSAGE_KEYS = ['WELCOME_MESSAGE','CLAIM_CREATED','CLAIM_ALREADY_EXISTS','CLAIM_STATUS_IN_PROGRESS','CLAIM_STATUS_UNDER_REVIEW',
   'CLAIM_STATUS_APPROVED','CLAIM_STATUS_REJECTED','EVIDENCE_SELECT_ACTIVITY','EVIDENCE_UPLOAD_PROMPT','EVIDENCE_RECEIVED','EVIDENCE_PENDING',
@@ -31,6 +32,20 @@ export const templateDraftSchema = draftShape.superRefine((draft,ctx)=>{
   if(!safeHttps(draft.campaign.heroImage))ctx.addIssue({code:'custom',path:['campaign','heroImage'],message:'Use an HTTPS URL without credentials or private/local host.'});
   const secondaryImage=draft.campaign.settings.secondaryImage;
   if(typeof secondaryImage==='string'&&secondaryImage&&!safeHttps(secondaryImage))ctx.addIssue({code:'custom',path:['campaign','settings','secondaryImage'],message:'Use an HTTPS URL without credentials or private/local host.'});
+  if(draft.campaign.settings.imageHotspots!==undefined){
+    const parsedMaps=imageHotspotMapsSchema.safeParse(draft.campaign.settings.imageHotspots);
+    if(!parsedMaps.success)ctx.addIssue({code:'custom',path:['campaign','settings','imageHotspots'],message:'Image hotspot configuration is invalid.'});
+    else{
+      parsedMaps.data.forEach((map,index)=>{
+        if(!safeHttps(map.imageUrl))ctx.addIssue({code:'custom',path:['campaign','settings','imageHotspots',index,'imageUrl'],message:'Use an HTTPS image URL without credentials or private/local host.'});
+      });
+      for(const issue of validateImageHotspotTargets(parsedMaps.data,
+        draft.buttons.map((item)=>({key:item.buttonKey,label:item.label,actionType:item.actionType,actionValue:item.actionValue,enabled:item.enabled})),
+        draft.activities.map((item)=>({key:item.activityKey,label:item.title,actionType:item.actionType,actionValue:item.actionValue,enabled:item.enabled})))) {
+        ctx.addIssue({code:'custom',path:issue.path,message:issue.message});
+      }
+    }
+  }
   for(const [group,items] of [['buttons',draft.buttons],['activities',draft.activities]] as const){
     items.forEach((item,index)=>{if(item.actionType==='URI'&&item.actionValue&&!safeHttps(item.actionValue))ctx.addIssue({code:'custom',path:[group,index,'actionValue'],message:'Use an HTTPS URL without credentials or private/local host.'})});
     const keys=items.map((item)=>group==='buttons'?(item as typeof draft.buttons[number]).buttonKey:(item as typeof draft.activities[number]).activityKey);

@@ -31,6 +31,16 @@ describe('HTTP boundary', () => {
     expect(response.body).toContain('languageToggle');
   });
 
+  it('serves the authenticated-admin hotspot planner source', async () => {
+    const app = buildServer(loadConfig({ NODE_ENV: 'test', DATABASE_URL: 'postgres://localhost/test' }), {} as never);
+    servers.push(app);
+    const response = await app.inject({ method: 'GET', url: '/admin-image-hotspot-planner.js' });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('text/javascript');
+    expect(response.headers['x-content-type-options']).toBe('nosniff');
+    expect(response.body).toContain('Export hotspot plan JSON');
+  });
+
   it('serves only the allowlisted campaign image assets', async () => {
     const app = buildServer(loadConfig({ NODE_ENV: 'test', DATABASE_URL: 'postgres://localhost/test' }), {} as never);
     servers.push(app);

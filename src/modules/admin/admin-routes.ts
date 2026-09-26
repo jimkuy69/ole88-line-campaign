@@ -47,6 +47,7 @@ export function registerAdminRoutes(app:FastifyInstance, db:Db, isProduction:boo
   const campaignImages=new Map<string,string>([['ole88-how-to.png','image/png'],['ole88-promo.png','image/png']]);
   app.get('/admin',async(_request,reply)=>reply.header('content-type','text/html; charset=utf-8').header('content-security-policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'").send(await readFile(resolve(publicRoot,'admin.html'))));
   app.get('/admin-campaign-images.js',async(_request,reply)=>reply.header('content-type','text/javascript; charset=utf-8').header('x-content-type-options','nosniff').send(await readFile(resolve(publicRoot,'admin-campaign-images.js'))));
+  app.get('/admin-image-hotspot-planner.js',async(_request,reply)=>reply.header('content-type','text/javascript; charset=utf-8').header('x-content-type-options','nosniff').send(await readFile(resolve(publicRoot,'admin-image-hotspot-planner.js'))));
   app.get('/campaign-images/:name',async(request,reply)=>{
     const name=(request.params as {name:string}).name;
     const contentType=campaignImages.get(name);
