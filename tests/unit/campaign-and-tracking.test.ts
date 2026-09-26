@@ -14,7 +14,7 @@ describe('campaign and tracking foundation', () => {
 
   it('records a provider-neutral tracking event', async () => {
     const returning = vi.fn().mockResolvedValue([{ id: 'track-1' }]);
-    const values = vi.fn().mockReturnValue({ returning });
+    const values = vi.fn().mockReturnValue({ onConflictDoNothing: vi.fn().mockReturnValue({ returning }) });
     const insert = vi.fn().mockReturnValue({ values });
     const service = new TrackingService({ insert } as never);
     await expect(service.trackEvent({ eventType: 'BUTTON_CLICK', buttonKey: 'BTN_PROMOTION' })).resolves.toEqual({ id: 'track-1' });

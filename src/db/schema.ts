@@ -87,7 +87,8 @@ export const claims = pgTable('claims', {
   completedAt: timestamp('completed_at', { withTimezone: true }),
   metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default({}),
   createdAt: createdAt(), updatedAt: updatedAt(),
-}, (t) => [unique('claims_user_campaign_uq').on(t.userId, t.campaignId), index('claims_campaign_status_idx').on(t.campaignId, t.status)]);
+}, (t) => [unique('claims_user_campaign_uq').on(t.userId, t.campaignId), index('claims_campaign_status_idx').on(t.campaignId, t.status),
+  index('claims_campaign_claimed_at_idx').on(t.campaignId, t.claimedAt), index('claims_claimed_at_idx').on(t.claimedAt)]);
 
 export const claimActivities = pgTable('claim_activities', {
   id: uuid('id').defaultRandom().primaryKey(),
@@ -116,6 +117,7 @@ export const evidence = pgTable('evidence', {
 }, (t) => [index('evidence_claim_created_idx').on(t.claimId, t.createdAt),
   uniqueIndex('evidence_source_message_uq').on(t.sourceMessageId).where(sql`${t.sourceMessageId} IS NOT NULL`),
   index('evidence_status_created_idx').on(t.status, t.createdAt),
+  index('evidence_created_at_idx').on(t.createdAt), index('evidence_status_reviewed_at_idx').on(t.status, t.reviewedAt),
   check('evidence_status_ck', sql`${t.status} IN ('SUBMITTED', 'APPROVED', 'REJECTED')`)]);
 
 export const evidenceUploadContexts = pgTable('evidence_upload_contexts', {
@@ -134,8 +136,11 @@ export const trackingEvents = pgTable('tracking_events', {
   campaignId: uuid('campaign_id').references(() => campaigns.id, { onDelete: 'set null' }),
   claimId: uuid('claim_id').references(() => claims.id, { onDelete: 'set null' }),
   eventType: varchar('event_type', { length: 64 }).notNull(), buttonKey: varchar('button_key', { length: 100 }),
+  sourceEventId: varchar('source_event_id', { length: 128 }),
   metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default({}), createdAt: createdAt(),
-}, (t) => [index('tracking_campaign_created_idx').on(t.campaignId, t.createdAt)]);
+}, (t) => [index('tracking_campaign_created_idx').on(t.campaignId, t.createdAt),
+  index('tracking_created_at_idx').on(t.createdAt),
+  uniqueIndex('tracking_source_event_uq').on(t.sourceEventId).where(sql`${t.sourceEventId} IS NOT NULL`)]);
 
 export const auditLogs = pgTable('audit_logs', {
   id: uuid('id').defaultRandom().primaryKey(),
@@ -171,11 +176,14 @@ export const webhookEvents = pgTable('webhook_events', {
   processedAt: timestamp('processed_at', { withTimezone: true }), errorCode: varchar('error_code', { length: 100 }),
   attemptCount: integer('attempt_count').notNull().default(0), nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }).notNull().defaultNow().$defaultFn(() => new Date()),
   leaseUntil: timestamp('lease_until', { withTimezone: true }), processingStartedAt: timestamp('processing_started_at', { withTimezone: true }),
-}, (t) => [unique('webhook_events_channel_provider_id_uq').on(t.channel, t.providerEventId), index('webhook_events_status_received_idx').on(t.status, t.nextAttemptAt)]);
+}, (t) => [unique('webhook_events_channel_provider_id_uq').on(t.channel, t.providerEventId), index('webhook_events_status_received_idx').on(t.status, t.nextAttemptAt),
+  index('webhook_events_received_at_idx').on(t.receivedAt), index('webhook_events_status_lease_idx').on(t.status, t.leaseUntil)]);
 
 export const outboundMessages = pgTable('outbound_messages', {
   id: uuid('id').defaultRandom().primaryKey(), dedupeKey: varchar('dedupe_key', { length: 200 }).notNull().unique(),
   deliveryType: varchar('delivery_type', { length: 16 }).notNull().default('REPLY'),
+  campaignId: uuid('campaign_id').references(() => campaigns.id, { onDelete: 'set null' }),
+  purpose: varchar('purpose', { length: 32 }),
   retryKey: varchar('retry_key', { length: 36 }),
   recipientLineUserId: varchar('recipient_line_user_id', { length: 255 }).notNull(),
   replyToken: text('reply_token'), messages: jsonb('messages').$type<Record<string, unknown>[]>().notNull(),
@@ -184,5 +192,7 @@ export const outboundMessages = pgTable('outbound_messages', {
   sendingStartedAt: timestamp('sending_started_at', { withTimezone: true }),
   createdAt: createdAt(), updatedAt: updatedAt(), sentAt: timestamp('sent_at', { withTimezone: true }),
 }, (t) => [index('outbound_messages_status_created_idx').on(t.status, t.createdAt),
+  index('outbound_campaign_purpose_status_idx').on(t.campaignId, t.purpose, t.status, t.createdAt),
+  index('outbound_campaign_purpose_sent_idx').on(t.campaignId, t.purpose, t.status, t.sentAt),
   uniqueIndex('outbound_messages_retry_key_uq').on(t.retryKey).where(sql`${t.retryKey} IS NOT NULL`),
   check('outbound_messages_delivery_type_ck', sql`${t.deliveryType} IN ('REPLY', 'PUSH')`)]);

@@ -1,4 +1,4 @@
-import { and, count, eq } from 'drizzle-orm';
+import { and, count, eq, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import * as schema from '../../db/schema.js';
 import type { CampaignForClaim, ClaimRecord, ClaimStore, ClaimUnitOfWork } from './claim-service.js';
@@ -33,6 +33,14 @@ export class DrizzleClaimStore implements ClaimStore {
         }).returning({ id: schema.claims.id, userId: schema.claims.userId, campaignId: schema.claims.campaignId,
           status: schema.claims.status, claimCode: schema.claims.claimCode });
         return row as ClaimRecord | undefined ?? null;
+      },
+      trackClaimRequest: async (input) => {
+        await tx.insert(schema.trackingEvents).values({userId:input.userId,campaignId:input.campaignId,claimId:input.claimId,
+          eventType:'CLAIM_REQUEST',sourceEventId:input.sourceEventId,metadata:{outcome:input.created?'NEW':'DUPLICATE',created:input.created}})
+          .onConflictDoNothing();
+        await tx.update(schema.trackingEvents).set({userId:input.userId,campaignId:input.campaignId,claimId:input.claimId,
+          metadata:{outcome:input.created?'NEW':'DUPLICATE',created:input.created}})
+          .where(and(eq(schema.trackingEvents.sourceEventId,input.sourceEventId),sql`${schema.trackingEvents.metadata}->>'outcome' = 'PENDING'`));
       },
     }));
   }

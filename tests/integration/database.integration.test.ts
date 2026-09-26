@@ -16,6 +16,7 @@ import { buildServer } from '../../src/server.js';
 import { loadConfig } from '../../src/config/env.js';
 import { EvidenceService } from '../../src/modules/evidence/evidence-service.js';
 import { FileSystemEvidenceStorage } from '../../src/modules/evidence/storage.js';
+import { AnalyticsService } from '../../src/modules/admin/analytics-service.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -50,6 +51,62 @@ integration('PostgreSQL foundation constraints', () => {
 
   beforeEach(async () => {
     await pool.query('TRUNCATE admin_login_attempts, admin_sessions, admin_users, outbound_messages, webhook_events, audit_logs, tracking_events, evidence, claim_activities, claims, campaign_messages, campaign_activities, campaign_buttons, campaigns, channel_identities, users CASCADE');
+  });
+
+  it('reports idempotent funnel metrics, current statuses, Bangkok daily rows, and paginated redacted issues', async () => {
+    const from=new Date('2026-09-01T00:00:00.000Z');const to=new Date('2026-10-01T00:00:00.000Z');
+    const [campaign]=await db.insert(schema.campaigns).values({code:'ANALYTICS_CAMPAIGN',name:'Analytics',templateType:'WELCOME',status:'ACTIVE'}).returning();
+    const [user1,user2]=await db.insert(schema.users).values([{},{}]).returning();
+    const tracking=new TrackingService(db);
+    await tracking.trackEvent({sourceEventId:'analytics-follow-1',userId:user1!.id,campaignId:campaign!.id,eventType:'FOLLOW_PROCESSED',metadata:{lineUserId:'never-return-this'}});
+    await tracking.trackEvent({sourceEventId:'analytics-follow-1',userId:user1!.id,campaignId:campaign!.id,eventType:'FOLLOW_PROCESSED'});
+    await tracking.trackEvent({sourceEventId:'analytics-follow-2',userId:user2!.id,campaignId:campaign!.id,eventType:'FOLLOW_PROCESSED'});
+    await db.insert(schema.trackingEvents).values({sourceEventId:'analytics-follow-outside-range',userId:user2!.id,campaignId:campaign!.id,eventType:'FOLLOW_PROCESSED',createdAt:new Date('2026-08-31T23:59:59Z')});
+    const [identity1]=await db.insert(schema.channelIdentities).values({userId:user1!.id,channel:'LINE',externalUserId:'analytics-line-1'}).returning();
+    await db.insert(schema.channelIdentities).values({userId:user2!.id,channel:'LINE',externalUserId:'analytics-line-2'});
+    const claimService=new ClaimService(new DrizzleClaimStore(db),()=>new Date('2026-09-15T12:00:00.000Z'));
+    const first=await claimService.createClaim(user1!.id,campaign!.code,'analytics-claim-first');
+    const duplicate=await claimService.createClaim(user1!.id,campaign!.code,'analytics-claim-duplicate');
+    await claimService.createClaim(user1!.id,campaign!.code,'analytics-claim-first');
+    expect(first.created).toBe(true);expect(duplicate.created).toBe(false);
+    const [firstRequest]=await db.select().from(schema.trackingEvents).where(eq(schema.trackingEvents.sourceEventId,'analytics-claim-first'));
+    expect(firstRequest!.metadata).toMatchObject({outcome:'NEW',created:true});
+    const [claim2]=await db.insert(schema.claims).values({userId:user2!.id,campaignId:campaign!.id,claimCode:'ANALYTICS_CLAIM_2',claimedAt:new Date('2026-09-14T18:00:00Z')}).returning();
+    await db.insert(schema.outboundMessages).values({dedupeKey:'analytics-welcome-1',deliveryType:'REPLY',campaignId:campaign!.id,purpose:'WELCOME',recipientLineUserId:'analytics-line-1',replyToken:null,messages:[],status:'SENT',createdAt:new Date('2026-09-15T12:00:00Z'),sentAt:new Date('2026-09-15T12:00:01Z')});
+    await db.insert(schema.evidence).values([
+      {claimId:first.claim.id,userId:user1!.id,channelIdentityId:identity1!.id,type:'image/png',storageKey:'analytics-pending.png',status:'SUBMITTED',createdAt:new Date('2026-09-16T12:00:00Z')},
+      {claimId:claim2!.id,userId:user2!.id,type:'image/png',storageKey:'analytics-approved.png',status:'APPROVED',createdAt:new Date('2026-09-17T12:00:00Z'),reviewedAt:new Date('2026-09-19T12:00:00Z')},
+      {claimId:claim2!.id,userId:user2!.id,type:'image/png',storageKey:'analytics-rejected.png',status:'REJECTED',createdAt:new Date('2026-09-17T13:00:00Z'),reviewedAt:new Date('2026-09-20T12:00:00Z')},
+    ]);
+    await db.insert(schema.webhookEvents).values([
+      {channel:'LINE',providerEventId:'analytics-webhook-failed',eventType:'postback',payload:{secret:'must-not-leak'},status:'FAILED',receivedAt:new Date('2026-09-21T12:00:00Z'),errorCode:'TEST_FAILURE'},
+      {channel:'LINE',providerEventId:'analytics-webhook-processing',eventType:'follow',payload:{},status:'PROCESSING',leaseUntil:new Date('2026-09-21T11:00:00Z'),receivedAt:new Date('2026-09-21T10:00:00Z')},
+      {channel:'LINE',providerEventId:'analytics-webhook-received',eventType:'message',payload:{},status:'RECEIVED',receivedAt:new Date('2026-09-21T12:30:00Z')},
+    ]);
+    await db.insert(schema.outboundMessages).values([
+      {dedupeKey:'analytics-outbound-uncertain',deliveryType:'PUSH',campaignId:campaign!.id,purpose:'EVIDENCE_DECISION',recipientLineUserId:'line-private',replyToken:null,messages:[{type:'text',text:'private body'}],status:'UNCERTAIN'},
+      {dedupeKey:'analytics-outbound-failed',deliveryType:'REPLY',campaignId:campaign!.id,purpose:'CLAIM_RESPONSE',recipientLineUserId:'line-private',replyToken:null,messages:[],status:'FAILED'},
+    ]);
+    const service=new AnalyticsService(db,()=>new Date('2026-09-25T12:00:00Z'));
+    const result=await service.overview({from,to,campaignId:campaign!.id});
+    expect(result.metrics).toMatchObject({follow_events:2,unique_followers:2,welcome_sent:1,claim_request_events:2,claim_request_claims:1,
+      duplicate_claim_requests:1,unique_claims:2,unique_claimers:2,proof_submitted:3,claims_with_proof:2,pending_review:1,evidence_approved:1,claims_approved:1,evidence_rejected:1,claims_rejected:1});
+    expect(result.outbound).toMatchObject({SENT:1,UNCERTAIN:1,FAILED:1});
+    expect(result.webhooks).toMatchObject({FAILED:1,PROCESSING:1,RECEIVED:1});
+    expect(result.daily.length).toBeGreaterThan(0);
+    expect(result.daily).toContainEqual({day:'2026-09-15',metric:'UNIQUE_CLAIM',total:1});
+    const webhookIssues=await service.issues('webhook',{limit:1,offset:0});
+    expect(webhookIssues).toHaveLength(1);expect(JSON.stringify(webhookIssues)).not.toContain('must-not-leak');
+    expect(await service.issues('webhook',{limit:1,offset:1})).toHaveLength(1);
+    const outboundIssues=await service.issues('outbound',{campaignId:campaign!.id,limit:10,offset:0});
+    expect(outboundIssues).toHaveLength(2);expect(JSON.stringify(outboundIssues)).not.toContain('private body');
+    expect(await service.issues('review',{campaignId:campaign!.id,limit:10,offset:0})).toHaveLength(1);
+  });
+
+  it('returns zero-valued metrics and empty trends when no data matches a date range', async () => {
+    const result=await new AnalyticsService(db).overview({from:new Date('2020-01-01T00:00:00Z'),to:new Date('2020-02-01T00:00:00Z')});
+    expect(result.metrics).toMatchObject({follow_events:0,unique_followers:0,welcome_sent:0,claim_request_events:0,unique_claims:0,pending_review:0});
+    expect(result.daily).toEqual([]);expect(result.outbound).toEqual({});expect(result.webhooks).toEqual({});
   });
 
   afterAll(async () => { await pool?.end(); });
@@ -157,6 +214,7 @@ integration('PostgreSQL foundation constraints', () => {
     try {
       const denied=await app.inject({method:'GET',url:'/api/admin/reviews'});
       expect(denied.statusCode).toBe(401);
+      expect((await app.inject({method:'GET',url:'/api/admin/analytics?from=2026-09-01T00:00:00Z&to=2026-10-01T00:00:00Z'})).statusCode).toBe(401);
       const image=await app.inject({method:'GET',url:'/api/admin/evidence/not-an-id/content'});
       expect(image.statusCode).toBe(401);
       const post=await app.inject({method:'POST',url:'/api/admin/reviews/not-an-id/approve',payload:{expectedVersion:1}});
@@ -192,6 +250,9 @@ integration('PostgreSQL foundation constraints', () => {
       expect(sessions[0]!.tokenHash).toBe(sha256(rawToken));expect(sessions[0]!.tokenHash).not.toBe(rawToken);
       const {csrfToken}=login.json() as {csrfToken:string};
       const headers={cookie:cookie.split(';')[0]!, 'x-csrf-token':csrfToken};
+      const dashboard=await app.inject({method:'GET',url:'/api/admin/analytics?from=2026-09-01T00%3A00%3A00.000Z&to=2026-10-01T00%3A00%3A00.000Z',headers});
+      expect(dashboard.statusCode).toBe(200);expect(dashboard.json().metrics).toHaveProperty('unique_claims');
+      expect((await app.inject({method:'GET',url:'/api/admin/analytics/issues?kind=webhook&status=UNCERTAIN',headers})).statusCode).toBe(400);
       expect((await app.inject({method:'GET',url:'/admin'})).headers['content-security-policy']).toContain("default-src 'self'");
       expect((await app.inject({method:'GET',url:'/admin.js'})).statusCode).toBe(200);
       const noCsrf=await app.inject({method:'POST',url:'/api/admin/campaigns',headers:{cookie:headers.cookie},payload:{templateId:'welcome-claim',code:'ADMIN_NO_CSRF'}});

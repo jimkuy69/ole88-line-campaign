@@ -1,3 +1,4 @@
+import { and, eq, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import * as schema from '../../db/schema.js';
 
@@ -9,6 +10,7 @@ export type TrackingEventInput = {
   claimId?: string | null;
   eventType: string;
   buttonKey?: string | null;
+  sourceEventId?: string | null;
   metadata?: Record<string, unknown>;
 };
 
@@ -22,8 +24,16 @@ export class TrackingService {
       claimId: input.claimId ?? null,
       eventType: input.eventType,
       buttonKey: input.buttonKey ?? null,
+      sourceEventId: input.sourceEventId ?? null,
       metadata: input.metadata ?? {},
-    }).returning();
+    }).onConflictDoNothing().returning();
     return event;
+  }
+
+  async setClaimRequestOutcome(sourceEventId:string,outcome:'NEW'|'DUPLICATE'|'INELIGIBLE') {
+    const [event]=await this.db.update(schema.trackingEvents).set({metadata:{outcome,...(outcome==='NEW'?{created:true}:outcome==='DUPLICATE'?{created:false}:{})}})
+      .where(and(eq(schema.trackingEvents.sourceEventId,sourceEventId),eq(schema.trackingEvents.eventType,'CLAIM_REQUEST'),
+        sql`${schema.trackingEvents.metadata}->>'outcome' = 'PENDING'`)).returning({id:schema.trackingEvents.id});
+    return event??null;
   }
 }

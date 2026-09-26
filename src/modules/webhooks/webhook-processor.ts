@@ -15,6 +15,7 @@ import { CampaignService } from '../campaigns/campaign-service.js';
 import { campaignButtonPostback } from '../campaigns/postback-data.js';
 import { parseCampaignButtonPostback } from '../campaigns/postback-data.js';
 import { buildActivityCard, buildCampaignCard } from '../../integrations/line/campaign-renderer.js';
+import { TrackingService } from '../tracking/tracking-service.js';
 
 type Db = NodePgDatabase<typeof schema>;
 type InboxRow = typeof schema.webhookEvents.$inferSelect;
@@ -28,11 +29,13 @@ export class WebhookEventProcessor {
   private readonly router = new LineEventRouter();
   private readonly campaigns: CampaignService;
   private readonly claims: ClaimService;
+  private readonly tracking: TrackingService;
 
   constructor(private readonly db: Db, private readonly sender: ReplySender, private readonly accessTokenConfigured = true,
     private readonly evidence?:EvidenceService) {
     this.campaigns = new CampaignService(db);
     this.claims = new ClaimService(new DrizzleClaimStore(db));
+    this.tracking = new TrackingService(db);
     this.router.register('follow', (event) => this.onFollow(event));
     this.router.register('postback', (event) => this.onPostback(event));
     this.router.register('message', (event) => this.onMessage(event));
@@ -180,7 +183,10 @@ export class WebhookEventProcessor {
     const card = buildCampaignCard(campaign, enabledButtons);
     this.assertDeliveryConfigured();
     await this.ensureLineIdentity(lineUserId);
-    await this.enqueueReply(event.providerEventId, lineUserId, replyToken, [{ type: 'text', text: welcome }, card]);
+    const [identity] = await this.db.select({userId:schema.channelIdentities.userId}).from(schema.channelIdentities).where(and(
+      eq(schema.channelIdentities.channel,'LINE'),eq(schema.channelIdentities.externalUserId,lineUserId))).limit(1);
+    if (identity) await this.tracking.trackEvent({sourceEventId:event.providerEventId,userId:identity.userId,campaignId:campaign.id,eventType:'FOLLOW_PROCESSED'});
+    await this.enqueueReply(event.providerEventId, lineUserId, replyToken, [{ type: 'text', text: welcome }, card], {campaignId:campaign.id,purpose:'WELCOME'});
   }
 
   private async onPostback(event: NormalizedLineEvent) {
@@ -204,7 +210,14 @@ export class WebhookEventProcessor {
       eq(schema.channelIdentities.channel, 'LINE'), eq(schema.channelIdentities.externalUserId, lineUserId),
     )).limit(1);
     if (!identity) return;
-    const result = await this.claims.createClaim(identity.userId, campaign.code);
+    await this.tracking.trackEvent({sourceEventId:event.providerEventId,userId:identity.userId,campaignId:campaign.id,eventType:'CLAIM_REQUEST',metadata:{outcome:'PENDING'}});
+    let result;
+    try { result = await this.claims.createClaim(identity.userId, campaign.code, event.providerEventId); }
+    catch(error) {
+      if (error instanceof DomainError && ['CAMPAIGN_LIMIT_REACHED','CAMPAIGN_OUT_OF_SCHEDULE','CAMPAIGN_DISABLED'].includes(error.code))
+        await this.tracking.setClaimRequestOutcome(event.providerEventId,'INELIGIBLE');
+      throw error;
+    }
     const messages = await this.campaigns.getCampaignMessages(campaign.id);
     await this.ensureClaimActivities(result.claim.id,campaign.id);
     const statusKey=result.created?'CLAIM_CREATED':claimStatusMessageKey(result.claim.status);
@@ -276,11 +289,12 @@ export class WebhookEventProcessor {
     });
   }
 
-  private async enqueueReply(dedupeKey: string, recipient: string, replyToken: string, messages: LineMessageObject[]) {
+  private async enqueueReply(dedupeKey: string, recipient: string, replyToken: string, messages: LineMessageObject[], options:{campaignId?:string;purpose?:string}={}) {
     this.assertDeliveryConfigured();
     if (messages.length > 5) throw new DomainError('LINE reply supports at most five message objects.', 'LINE_REPLY_TOO_MANY_MESSAGES');
     await this.db.insert(schema.outboundMessages).values({
       dedupeKey: `line-reply:${dedupeKey}`, deliveryType:'REPLY',recipientLineUserId: recipient, replyToken,
+      campaignId:options.campaignId??null,purpose:options.purpose??null,
       messages: messages as Record<string, unknown>[], status: 'READY',
     }).onConflictDoNothing({ target: schema.outboundMessages.dedupeKey });
     await this.deliverReply(`line-reply:${dedupeKey}`);

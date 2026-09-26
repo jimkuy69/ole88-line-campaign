@@ -10,6 +10,7 @@ import { CampaignAdminService } from './campaign-admin-service.js';
 import { templateDraftSchema } from './templates.js';
 import { EvidenceService } from '../evidence/evidence-service.js';
 import type { EvidenceStorage } from '../evidence/storage.js';
+import { AnalyticsService, InvalidAnalyticsRangeError } from './analytics-service.js';
 
 type Db = NodePgDatabase<typeof schema>;
 const COOKIE = 'ole88_admin_session';
@@ -41,6 +42,7 @@ export function registerAdminRoutes(app:FastifyInstance, db:Db, isProduction:boo
   const auth=new AdminAuthService(db);
   const campaigns=new CampaignAdminService(db);
   const evidence=new EvidenceService(db,{getMessageContent:async()=>{throw new Error('Evidence media retrieval is worker-only.')}},evidenceStorage);
+  const analytics=new AnalyticsService(db);
   app.get('/admin',async(_request,reply)=>reply.header('content-type','text/html; charset=utf-8').header('content-security-policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'").send(await readFile(resolve(publicRoot,'admin.html'))));
   app.get('/admin.js',async(_request,reply)=>reply.header('content-type','text/javascript; charset=utf-8').header('x-content-type-options','nosniff').send(await readFile(resolve(publicRoot,'admin.js'))));
   app.get('/admin.css',async(_request,reply)=>reply.header('content-type','text/css; charset=utf-8').send(await readFile(resolve(publicRoot,'admin.css'))));
@@ -107,6 +109,19 @@ export function registerAdminRoutes(app:FastifyInstance, db:Db, isProduction:boo
       ...(query.data.from?{from:new Date(query.data.from)}:{}),...(query.data.to?{to:new Date(query.data.to)}:{})})};
   }));
   app.get('/api/admin/review-campaigns',(req,rep)=>route(req,rep,async()=>({campaigns:await campaigns.list()})));
+  app.get('/api/admin/analytics',(req,rep)=>route(req,rep,async()=>{
+    const query=z.object({from:z.string().datetime({offset:true}),to:z.string().datetime({offset:true}),campaignId:z.string().uuid().optional()}).safeParse(req.query);
+    if(!query.success)return rep.code(400).send({error:'Provide valid from/to timestamps and optional campaignId.'});
+    try{return await analytics.overview({from:new Date(query.data.from),to:new Date(query.data.to),...(query.data.campaignId?{campaignId:query.data.campaignId}:{})});}
+    catch(error){if(error instanceof InvalidAnalyticsRangeError)return rep.code(400).send({error:error.message});throw error;}
+  }));
+  app.get('/api/admin/analytics/issues',(req,rep)=>route(req,rep,async()=>{
+    const query=z.object({kind:z.enum(['webhook','outbound','review']),campaignId:z.string().uuid().optional(),status:z.enum(['FAILED','PROCESSING','UNCERTAIN','SENDING','SUBMITTED']).optional(),limit:z.coerce.number().int().min(1).max(100).default(50),offset:z.coerce.number().int().min(0).max(100000).default(0)}).safeParse(req.query);
+    if(!query.success)return rep.code(400).send({error:'Invalid issue filters.'});
+    const statuses={webhook:['FAILED','PROCESSING'],outbound:['FAILED','UNCERTAIN','SENDING'],review:['SUBMITTED']} as const;
+    if(query.data.status&&!statuses[query.data.kind].includes(query.data.status as never))return rep.code(400).send({error:'Status does not apply to this issue queue.'});
+    return {items:await analytics.issues(query.data.kind,{...(query.data.campaignId?{campaignId:query.data.campaignId}:{}),...(query.data.status?{status:query.data.status}:{}),limit:query.data.limit,offset:query.data.offset})};
+  }));
   app.get('/api/admin/reviews/:id',(req,rep)=>route(req,rep,async()=>evidence.reviewDetail((req.params as {id:string}).id)));
   app.get('/api/admin/evidence/:id/content',(req,rep)=>route(req,rep,async()=>{
     const id=(req.params as {id:string}).id;

@@ -25,6 +25,7 @@ export interface ClaimUnitOfWork {
   getExistingClaim(userId: string, campaignId: string): Promise<ClaimRecord | null>;
   countClaims(campaignId: string): Promise<number>;
   insertClaimOnConflictDoNothing(input: ClaimRecord): Promise<ClaimRecord | null>;
+  trackClaimRequest?(input: { sourceEventId: string; userId: string; campaignId: string; claimId: string; created: boolean }): Promise<void>;
 }
 
 export interface ClaimStore {
@@ -49,14 +50,17 @@ export class ClaimService {
     return { eligible: true as const, reason: null };
   }
 
-  async createClaim(userId: string, campaignCode: string) {
+  async createClaim(userId: string, campaignCode: string, sourceEventId?: string) {
     const at = this.now();
     return this.store.transaction(async (tx) => {
       const campaign = await tx.getCampaignForUpdate(campaignCode);
       if (!campaign) throw new DomainError('Campaign not found', 'CAMPAIGN_NOT_FOUND');
 
       const existing = await tx.getExistingClaim(userId, campaign.id);
-      if (existing) return { claim: existing, created: false };
+      if (existing) {
+        if (sourceEventId) await tx.trackClaimRequest?.({sourceEventId,userId,campaignId:campaign.id,claimId:existing.id,created:false});
+        return { claim: existing, created: false };
+      }
 
       const eligible = this.checkEligibility(campaign, null, await tx.countClaims(campaign.id), at);
       if (!eligible.eligible) throw new DomainError(`Claim is not eligible: ${eligible.reason}`, eligible.reason);
@@ -64,10 +68,16 @@ export class ClaimService {
       const created = await tx.insertClaimOnConflictDoNothing({
         id: randomUUID(), userId, campaignId: campaign.id, status: 'CLAIM_CREATED', claimCode: randomUUID(),
       });
-      if (created) return { claim: created, created: true };
+      if (created) {
+        if (sourceEventId) await tx.trackClaimRequest?.({sourceEventId,userId,campaignId:campaign.id,claimId:created.id,created:true});
+        return { claim: created, created: true };
+      }
 
       const concurrentClaim = await tx.getExistingClaim(userId, campaign.id);
-      if (concurrentClaim) return { claim: concurrentClaim, created: false };
+      if (concurrentClaim) {
+        if (sourceEventId) await tx.trackClaimRequest?.({sourceEventId,userId,campaignId:campaign.id,claimId:concurrentClaim.id,created:false});
+        return { claim: concurrentClaim, created: false };
+      }
       throw new DomainError('Claim insert conflicted without an existing claim', 'CLAIM_CREATE_CONFLICT');
     });
   }
