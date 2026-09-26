@@ -32,7 +32,7 @@ const publicRoot=resolve(process.cwd(),'public');
 const usernameSchema=z.string().trim().min(3).max(120).regex(/^[A-Za-z0-9_.@-]+$/);
 const codeSchema=z.string().regex(/^[A-Za-z0-9_-]{2,100}$/);
 
-export function registerAdminRoutes(app:FastifyInstance, db:Db, isProduction:boolean, evidenceStorage:EvidenceStorage) {
+export function registerAdminRoutes(app:FastifyInstance, db:Db, isProduction:boolean, evidenceStorage:EvidenceStorage, publicBaseUrl?:string) {
   app.addHook('onSend',async(request,reply,payload)=>{
     if(request.url.startsWith('/admin')||request.url.startsWith('/api/admin/')){
       reply.header('cache-control','no-store');reply.header('referrer-policy','no-referrer');reply.header('x-content-type-options','nosniff');
@@ -47,8 +47,7 @@ export function registerAdminRoutes(app:FastifyInstance, db:Db, isProduction:boo
   app.get('/admin.js',async(_request,reply)=>reply.header('content-type','text/javascript; charset=utf-8').header('x-content-type-options','nosniff').send(await readFile(resolve(publicRoot,'admin.js'))));
   app.get('/admin.css',async(_request,reply)=>reply.header('content-type','text/css; charset=utf-8').send(await readFile(resolve(publicRoot,'admin.css'))));
   app.post('/api/admin/login',async(request,reply)=>{
-    const origin=request.headers.origin;
-    if(origin&&origin!==`${request.protocol}://${request.headers.host}`)return reply.code(403).send({error:'Cross-origin login rejected.'});
+    if(!isSameOrigin(request,publicBaseUrl))return reply.code(403).send({error:'Cross-origin login rejected.'});
     const parsed=z.object({username:usernameSchema,password:z.string().min(1).max(128)}).safeParse(body(request));
     if(!parsed.success)return reply.code(400).send({error:'Invalid login input.'});
     const session=await auth.login(parsed.data.username,parsed.data.password,request.ip);
@@ -67,7 +66,7 @@ export function registerAdminRoutes(app:FastifyInstance, db:Db, isProduction:boo
     await auth.logout(cookie(request));setCookie(reply,'',0,isProduction);return {ok:true};
   });
   const route=async(request:FastifyRequest,reply:FastifyReply,action:(session:NonNullable<Awaited<ReturnType<typeof auth.getSession>>>)=>Promise<unknown>)=>{
-    const session=await requireAdmin(request,reply,auth,request.method!=='GET');if(!session)return;
+    const session=await requireAdmin(request,reply,auth,request.method!=='GET',publicBaseUrl);if(!session)return;
     try{return await action(session);}catch(error){return sendError(reply,error);}
   };
   app.get('/api/admin/templates',(req,rep)=>route(req,rep,async()=>({templates:campaigns.templates()})));
@@ -120,7 +119,9 @@ export function registerAdminRoutes(app:FastifyInstance, db:Db, isProduction:boo
     if(!query.success)return rep.code(400).send({error:'Invalid issue filters.'});
     const statuses={webhook:['FAILED','PROCESSING'],outbound:['FAILED','UNCERTAIN','SENDING'],review:['SUBMITTED']} as const;
     if(query.data.status&&!statuses[query.data.kind].includes(query.data.status as never))return rep.code(400).send({error:'Status does not apply to this issue queue.'});
-    return {items:await analytics.issues(query.data.kind,{...(query.data.campaignId?{campaignId:query.data.campaignId}:{}),...(query.data.status?{status:query.data.status}:{}),limit:query.data.limit,offset:query.data.offset})};
+    const globalQueue=query.data.kind==='webhook';
+    return {campaignScope:globalQueue?'ALL_CAMPAIGNS':query.data.campaignId?'SELECTED_CAMPAIGN':'ALL_CAMPAIGNS',
+      items:await analytics.issues(query.data.kind,{...(!globalQueue&&query.data.campaignId?{campaignId:query.data.campaignId}:{}),...(query.data.status?{status:query.data.status}:{}),limit:query.data.limit,offset:query.data.offset})};
   }));
   app.get('/api/admin/reviews/:id',(req,rep)=>route(req,rep,async()=>evidence.reviewDetail((req.params as {id:string}).id)));
   app.get('/api/admin/evidence/:id/content',(req,rep)=>route(req,rep,async()=>{
@@ -141,16 +142,20 @@ export function registerAdminRoutes(app:FastifyInstance, db:Db, isProduction:boo
   }));
 }
 
-async function requireAdmin(request:FastifyRequest,reply:FastifyReply,auth:AdminAuthService,mutating:boolean) {
+async function requireAdmin(request:FastifyRequest,reply:FastifyReply,auth:AdminAuthService,mutating:boolean,publicBaseUrl?:string) {
   const session=await auth.getSession(cookie(request));if(!session){reply.code(401).send({error:'Authentication required.'});return null;}
   if(mutating){
-    const origin=request.headers.origin;
-    const expected=`${request.protocol}://${request.headers.host}`;
-    if(origin && origin!==expected){reply.code(403).send({error:'Cross-origin request rejected.'});return null;}
+    if(!isSameOrigin(request,publicBaseUrl)){reply.code(403).send({error:'Cross-origin request rejected.'});return null;}
     const supplied=request.headers['x-csrf-token'];
     if(typeof supplied!=='string'||!safeEqual(supplied,session.session.csrfToken)){reply.code(403).send({error:'CSRF token required.'});return null;}
   }
   return session;
+}
+function isSameOrigin(request:FastifyRequest, publicBaseUrl?:string) {
+  const origin=request.headers.origin;
+  if(!origin)return true;
+  const expected=publicBaseUrl?new URL(publicBaseUrl).origin:`${request.protocol}://${request.headers.host}`;
+  return origin===expected;
 }
 function normalizeDraft<T extends {campaign:{heroImage:string|null;rewardType:string|null;rewardValue:string|null}}>(draft:T):T {
   const c=draft.campaign;

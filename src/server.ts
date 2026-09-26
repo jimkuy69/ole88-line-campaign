@@ -36,7 +36,7 @@ export function buildServer(config: ReturnType<typeof loadConfig>, db: Db, proce
   });
   app.addHook('onClose', async () => { if (processingTimer) clearInterval(processingTimer); });
   app.get('/health', async () => ({ status: 'ok' }));
-  registerAdminRoutes(app, db, config.NODE_ENV === 'production',new FileSystemEvidenceStorage(config.EVIDENCE_STORAGE_DIR));
+  registerAdminRoutes(app, db, config.NODE_ENV === 'production',new FileSystemEvidenceStorage(config.EVIDENCE_STORAGE_DIR),config.PUBLIC_BASE_URL);
 
   app.post('/webhooks/line', async (request, reply) => {
     if (!config.LINE_CHANNEL_SECRET) return reply.code(503).send({ error: 'LINE webhook is not configured' });

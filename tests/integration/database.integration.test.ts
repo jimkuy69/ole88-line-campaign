@@ -98,6 +98,8 @@ integration('PostgreSQL foundation constraints', () => {
     const webhookIssues=await service.issues('webhook',{limit:1,offset:0});
     expect(webhookIssues).toHaveLength(1);expect(JSON.stringify(webhookIssues)).not.toContain('must-not-leak');
     expect(await service.issues('webhook',{limit:1,offset:1})).toHaveLength(1);
+    // Webhook rows have no reliable campaign attribution; a campaign filter must not hide them.
+    expect(await service.issues('webhook',{campaignId:campaign!.id,limit:10,offset:0})).toHaveLength(2);
     const outboundIssues=await service.issues('outbound',{campaignId:campaign!.id,limit:10,offset:0});
     expect(outboundIssues).toHaveLength(2);expect(JSON.stringify(outboundIssues)).not.toContain('private body');
     expect(await service.issues('review',{campaignId:campaign!.id,limit:10,offset:0})).toHaveLength(1);
@@ -230,6 +232,21 @@ integration('PostgreSQL foundation constraints', () => {
     } finally { await app.close(); }
   });
 
+  it('validates Admin Origin against the configured public HTTPS origin behind a proxy', async () => {
+    await new AdminAuthService(db).createFirstAdmin('staging-admin','A safe staging passphrase!');
+    const app=buildServer(loadConfig({NODE_ENV:'test',DATABASE_URL:databaseUrl!,PUBLIC_BASE_URL:'https://staging.example.test'}),db);
+    try {
+      const rejected=await app.inject({method:'POST',url:'/api/admin/login',headers:{origin:'https://attacker.example'},payload:{username:'staging-admin',password:'A safe staging passphrase!'}});
+      expect(rejected.statusCode).toBe(403);
+      const login=await app.inject({method:'POST',url:'/api/admin/login',headers:{origin:'https://staging.example.test'},payload:{username:'staging-admin',password:'A safe staging passphrase!'}});
+      expect(login.statusCode).toBe(200);
+      const cookieHeader=login.headers['set-cookie'];const cookie=Array.isArray(cookieHeader)?cookieHeader[0]!:cookieHeader!;
+      const headers={cookie:cookie.split(';')[0]!,'x-csrf-token':(login.json() as {csrfToken:string}).csrfToken,origin:'https://staging.example.test'};
+      expect((await app.inject({method:'POST',url:'/api/admin/campaigns',headers,payload:{templateId:'welcome-claim',code:'STAGING_ORIGIN'}})).statusCode).toBe(200);
+      expect((await app.inject({method:'POST',url:'/api/admin/campaigns',headers:{...headers,origin:'https://attacker.example'},payload:{templateId:'welcome-claim',code:'STAGING_ATTACK'}})).statusCode).toBe(403);
+    } finally { await app.close(); }
+  });
+
   it('runs the authenticated campaign-manager workflow, auditing mutations and rejecting stale edits', async () => {
     await new AdminAuthService(db).createFirstAdmin('owner','A safe passphrase 2026!');
     const app=buildServer(loadConfig({NODE_ENV:'test',DATABASE_URL:databaseUrl!}),db);
@@ -253,6 +270,8 @@ integration('PostgreSQL foundation constraints', () => {
       const dashboard=await app.inject({method:'GET',url:'/api/admin/analytics?from=2026-09-01T00%3A00%3A00.000Z&to=2026-10-01T00%3A00%3A00.000Z',headers});
       expect(dashboard.statusCode).toBe(200);expect(dashboard.json().metrics).toHaveProperty('unique_claims');
       expect((await app.inject({method:'GET',url:'/api/admin/analytics/issues?kind=webhook&status=UNCERTAIN',headers})).statusCode).toBe(400);
+      const webhookQueue=await app.inject({method:'GET',url:'/api/admin/analytics/issues?kind=webhook&campaignId=00000000-0000-4000-8000-000000000001',headers});
+      expect(webhookQueue.statusCode).toBe(200);expect(webhookQueue.json().campaignScope).toBe('ALL_CAMPAIGNS');
       expect((await app.inject({method:'GET',url:'/admin'})).headers['content-security-policy']).toContain("default-src 'self'");
       expect((await app.inject({method:'GET',url:'/admin.js'})).statusCode).toBe(200);
       const noCsrf=await app.inject({method:'POST',url:'/api/admin/campaigns',headers:{cookie:headers.cookie},payload:{templateId:'welcome-claim',code:'ADMIN_NO_CSRF'}});

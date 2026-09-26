@@ -34,3 +34,20 @@ Valid statuses: `TODO`, `IN_PROGRESS`, `BLOCKED`, `DONE`.
 - **Passed:** `npm test -- --maxWorkers=1` with disposable PostgreSQL 18.6 (`ole88_test` at `127.0.0.1:55439`): 46 tests passed across 8 files (22 PostgreSQL integration + 24 unit), 0 skipped. The integration harness recreated `public` and applied all migrations from empty schema, including 0008–0010. `npm run typecheck`, `npm run build`, `npm run lint`, `node --check public/admin.js`, and `npm run db:generate` passed; generation reports no schema drift.
 - Docker daemon was unavailable, so the test used the existing disposable local PostgreSQL 18 cluster under ignored `work/postgres-disposable`; no production/shared database was used. No live LINE OA, customer message, reward, or production deployment was involved.
 - Production prerequisites remain: private object storage, authorized OA image/push checks, HTTPS, secret management, backup/restore, explicit retention/deletion periods for webhook/tracking/audit/outbound/evidence data, and operational monitoring. Historical follow/claim interaction rows are not reconstructed; those new tracked metrics start from deployment.
+
+## Staging verification preparation
+
+- Dashboard webhook issue queue explicitly reports `ALL_CAMPAIGNS`; the UI explains that webhook events cannot be attributed to an individual campaign and omits a misleading campaign filter. API returns the scope explicitly. PostgreSQL tests verify selected campaign IDs do not hide global webhook issues.
+- Admin login and mutating Origin checks can use configured fixed `PUBLIC_BASE_URL` behind a TLS-terminating proxy; production mode requires an HTTPS origin. A PostgreSQL test verifies the configured public origin succeeds while a foreign origin is rejected.
+- Added [staging installation and end-to-end test plan](docs/staging-test-plan.md), including separate PostgreSQL, HTTPS webhook URL, test-only LINE OA, secret-manager configuration, private evidence volume, backup/restore rehearsal, follow-to-review expected results, and stop/rollback steps.
+- Added GitHub Actions checks for PostgreSQL-backed tests, typecheck, and build on main pushes and pull requests. The workflow uses a disposable PostgreSQL service and contains no project secrets.
+- **Passed locally:** 47 tests across 8 files (23 PostgreSQL integration + 24 unit), 0 skipped. The integration harness recreated an empty public schema and applied all migrations first on disposable local PostgreSQL 18.6 (`ole88_test`, localhost port 55439). `npm run typecheck`, `npm run build`, `npm run lint`, `node --check public/admin.js`, and `npm run db:generate` passed; Drizzle reports no schema changes. `git diff --check` passed (Git printed only LF-to-CRLF working-copy notices).
+- **Not performed:** no staging host, credentials, test OA, campaign, or HTTPS endpoint was provided, so no real LINE flow or staging deployment was run. No production deployment, customer messaging, or real campaign publication occurred.
+
+## Remaining owner setup before staging
+
+- Provide a staging host with DNS/TLS and a LINE-reachable webhook endpoint.
+- Provision isolated PostgreSQL, a backup destination, and a separate restore rehearsal target.
+- Create a dedicated test LINE OA/channel and designate a test user.
+- Configure database and LINE credentials in the staging secret manager (do not send them in chat), private persistent evidence storage, and the initial Admin.
+- Prepare campaign copy/artwork/destinations for a test-only campaign in Admin; verify the complete flow with the test OA before considering production readiness.
