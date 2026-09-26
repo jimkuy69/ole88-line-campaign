@@ -31,6 +31,18 @@ describe('HTTP boundary', () => {
     expect(response.body).toContain('languageToggle');
   });
 
+  it('serves only the allowlisted campaign image assets', async () => {
+    const app = buildServer(loadConfig({ NODE_ENV: 'test', DATABASE_URL: 'postgres://localhost/test' }), {} as never);
+    servers.push(app);
+    const image = await app.inject({ method: 'GET', url: '/campaign-images/ole88-promo.png' });
+    const unknown = await app.inject({ method: 'GET', url: '/campaign-images/unlisted.png' });
+    expect(image.statusCode).toBe(200);
+    expect(image.headers['content-type']).toContain('image/png');
+    expect(image.headers['cache-control']).toContain('public');
+    expect(image.rawPayload.length).toBeGreaterThan(1_000);
+    expect(unknown.statusCode).toBe(404);
+  });
+
   it('reports readiness only when PostgreSQL responds, without leaking connection details', async () => {
     const ready = buildServer(loadConfig({ NODE_ENV: 'test', DATABASE_URL: 'postgres://localhost/test' }),
       { execute: vi.fn().mockResolvedValue({ rows: [{ '?column?': 1 }] }) } as never);

@@ -15,6 +15,7 @@ type PublishCampaign = {
   maxClaims: number | null;
   rewardType: string | null;
   rewardValue: string | null;
+  settings?: Record<string, unknown>;
 };
 type PublishButton = { buttonKey: string; label: string; actionType: string; actionValue: string | null; enabled: boolean };
 type PublishActivity = { activityKey: string; title: string; description?: string|null; actionType: string; actionValue: string | null; enabled: boolean };
@@ -64,6 +65,8 @@ export function validateCampaignForPublishDetailed(
   if (!campaign.templateType.trim()) add('campaign.templateType','Template type is required.');
   if (!campaign.title?.trim()) add('campaign.title','Campaign title is required.');
   if (campaign.heroImage && !validHttpsUrl(campaign.heroImage)) add('campaign.heroImage','Hero image must be an HTTPS URL without embedded credentials.');
+  const secondaryImage=campaign.settings?.secondaryImage;
+  if (typeof secondaryImage==='string'&&secondaryImage&&!validHttpsUrl(secondaryImage)) add('campaign.settings.secondaryImage','Secondary image must be an HTTPS URL without embedded credentials.');
   if (campaign.startAt && campaign.endAt && campaign.startAt >= campaign.endAt) add('campaign.endAt','End date must be after start date.');
   if (campaign.maxClaims !== null && campaign.maxClaims < 1) add('campaign.maxClaims','Maximum claims must be a positive integer.');
   if (Boolean(campaign.rewardType?.trim()) !== Boolean(campaign.rewardValue?.trim())) {

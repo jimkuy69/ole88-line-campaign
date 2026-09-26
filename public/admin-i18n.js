@@ -93,6 +93,11 @@
     'End (ISO date/time)': 'วันเวลาสิ้นสุด',
     'Maximum claims': 'จำนวนสิทธิ์สูงสุด',
     'Hero image HTTPS URL': 'URL รูปภาพหลัก (HTTPS)',
+    'Secondary image HTTPS URL': 'URL รูปภาพที่สอง (HTTPS)',
+    'Use supplied OLE88 artwork': 'ใช้ภาพ OLE88 ที่ส่งมา',
+    'Secondary campaign image preview': 'ตัวอย่างรูปภาพแคมเปญภาพที่สอง',
+    'The supplied images are hosted on this staging site. Add image URLs over HTTPS; saving remains a separate action.':
+      'ภาพที่เตรียมไว้โฮสต์บน staging นี้ กรอก URL ภาพผ่าน HTTPS; การบันทึกยังต้องกดแยกต่างหาก',
     'https://…': 'https://…',
     'Image upload is not configured. Use an HTTPS image URL publicly reachable by LINE; the editor only previews it locally.':
       'ยังไม่ได้ตั้งค่าการอัปโหลดรูปภาพ โปรดใช้ URL HTTPS ที่ LINE เข้าถึงได้ รูปตัวอย่างในหน้านี้แสดงเฉพาะในเครื่อง',

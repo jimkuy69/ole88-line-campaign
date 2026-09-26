@@ -29,6 +29,8 @@ function safeHttps(value:string|null|undefined) {
 }
 export const templateDraftSchema = draftShape.superRefine((draft,ctx)=>{
   if(!safeHttps(draft.campaign.heroImage))ctx.addIssue({code:'custom',path:['campaign','heroImage'],message:'Use an HTTPS URL without credentials or private/local host.'});
+  const secondaryImage=draft.campaign.settings.secondaryImage;
+  if(typeof secondaryImage==='string'&&secondaryImage&&!safeHttps(secondaryImage))ctx.addIssue({code:'custom',path:['campaign','settings','secondaryImage'],message:'Use an HTTPS URL without credentials or private/local host.'});
   for(const [group,items] of [['buttons',draft.buttons],['activities',draft.activities]] as const){
     items.forEach((item,index)=>{if(item.actionType==='URI'&&item.actionValue&&!safeHttps(item.actionValue))ctx.addIssue({code:'custom',path:[group,index,'actionValue'],message:'Use an HTTPS URL without credentials or private/local host.'})});
     const keys=items.map((item)=>group==='buttons'?(item as typeof draft.buttons[number]).buttonKey:(item as typeof draft.activities[number]).activityKey);

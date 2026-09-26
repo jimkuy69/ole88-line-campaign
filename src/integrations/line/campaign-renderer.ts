@@ -2,17 +2,23 @@ import { DomainError } from '../../domain/errors.js';
 import { evidenceRequestPostback } from '../../modules/evidence/postback.js';
 import type { LineMessageObject } from './message-client.js';
 
-type CampaignContent={title:string|null;subtitle:string|null;heroImage:string|null};
+type CampaignContent={title:string|null;subtitle:string|null;heroImage:string|null;settings?:Record<string,unknown>};
 type ButtonContent={buttonKey:string;label:string;actionType:string;actionValue:string|null;enabled:boolean};
 type ActivityContent={activityKey:string;title:string;description?:string|null;actionType:string;actionValue:string|null};
 
 export function buildCampaignCard(campaign:CampaignContent,buttons:ButtonContent[]):LineMessageObject{
   const actions=buttons.filter((button)=>button.enabled).map((button)=>({type:'button',style:'primary',action:button.actionType==='URI'
     ?{type:'uri',label:slice(button.label,40),uri:button.actionValue}:{type:'postback',label:slice(button.label,40),data:button.actionValue}}));
-  const contents:Record<string,unknown>[]=[{type:'text',text:campaign.title||'Campaign',weight:'bold',size:'xl',wrap:true},
+  const secondaryImage=typeof campaign.settings?.secondaryImage==='string'?campaign.settings.secondaryImage:null;
+  const contents:Record<string,unknown>[]=[
+    ...(secondaryImage?[{type:'image',url:secondaryImage,size:'full',aspectRatio:'4:7',aspectMode:'fit'}]:[]),
+    {type:'text',text:campaign.title||'Campaign',weight:'bold',size:'xl',wrap:true},
     ...(campaign.subtitle?[{type:'text',text:campaign.subtitle,wrap:true}]:[]),...actions];
   const bubble:Record<string,unknown>={type:'bubble',body:{type:'box',layout:'vertical',spacing:'md',contents}};
-  if(campaign.heroImage)bubble.hero={type:'image',url:campaign.heroImage,size:'full',aspectRatio:'20:13',aspectMode:'cover'};
+  if(campaign.heroImage){
+    const portrait=campaign.heroImage.includes('/campaign-images/ole88-');
+    bubble.hero={type:'image',url:campaign.heroImage,size:'full',aspectRatio:portrait?'4:7':'20:13',aspectMode:portrait?'fit':'cover'};
+  }
   assertBubbleSize(bubble);
   return{type:'flex',altText:slice(campaign.title||'Campaign',1500),contents:bubble};
 }
