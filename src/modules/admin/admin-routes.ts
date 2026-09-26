@@ -36,7 +36,7 @@ const usernameSchema=z.string().trim().min(3).max(120).regex(/^[A-Za-z0-9_.@-]+$
 const codeSchema=z.string().regex(/^[A-Za-z0-9_-]{2,100}$/);
 
 export function registerAdminRoutes(app:FastifyInstance, db:Db, isProduction:boolean, evidenceStorage:EvidenceStorage,
-  campaignAssetStorage:CampaignAssetStorage, publicBaseUrl?:string, adminOnly=false) {
+  campaignAssetStorage:CampaignAssetStorage, publicBaseUrl?:string, adminOnly=false, adminOrigin?:string) {
   app.addHook('onSend',async(request,reply,payload)=>{
     if(request.url.startsWith('/admin')||request.url.startsWith('/api/admin/')){
       reply.header('cache-control','no-store');reply.header('referrer-policy','no-referrer');reply.header('x-content-type-options','nosniff');
@@ -74,7 +74,7 @@ export function registerAdminRoutes(app:FastifyInstance, db:Db, isProduction:boo
   app.get('/admin.js',async(_request,reply)=>reply.header('content-type','text/javascript; charset=utf-8').header('x-content-type-options','nosniff').send(await readFile(resolve(publicRoot,'admin.js'))));
   app.get('/admin.css',async(_request,reply)=>reply.header('content-type','text/css; charset=utf-8').send(await readFile(resolve(publicRoot,'admin.css'))));
   app.post('/api/admin/login',async(request,reply)=>{
-    if(!isSameOrigin(request,publicBaseUrl))return reply.code(403).send({error:'Cross-origin login rejected.'});
+    if(!isSameOrigin(request,adminOrigin))return reply.code(403).send({error:'Cross-origin login rejected.'});
     const parsed=z.object({username:usernameSchema,password:z.string().min(1).max(128)}).safeParse(body(request));
     if(!parsed.success)return reply.code(400).send({error:'Invalid login input.'});
     const session=await auth.login(parsed.data.username,parsed.data.password,request.ip);
@@ -88,12 +88,12 @@ export function registerAdminRoutes(app:FastifyInstance, db:Db, isProduction:boo
     return {user:session.user,csrfToken:session.session.csrfToken};
   });
   app.post('/api/admin/logout',async(request,reply)=>{
-    const session=await requireAdmin(request,reply,auth,true);
+    const session=await requireAdmin(request,reply,auth,true,adminOrigin);
     if(!session)return;
     await auth.logout(cookie(request));setCookie(reply,'',0,isProduction);return {ok:true};
   });
   const route=async(request:FastifyRequest,reply:FastifyReply,action:(session:NonNullable<Awaited<ReturnType<typeof auth.getSession>>>)=>Promise<unknown>)=>{
-    const session=await requireAdmin(request,reply,auth,request.method!=='GET',publicBaseUrl);if(!session)return;
+    const session=await requireAdmin(request,reply,auth,request.method!=='GET',adminOrigin);if(!session)return;
     try{return await action(session);}catch(error){return sendError(reply,error);}
   };
   app.get('/api/admin/templates',(req,rep)=>route(req,rep,async()=>({templates:campaigns.templates()})));

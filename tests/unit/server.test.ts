@@ -23,6 +23,16 @@ describe('HTTP boundary', () => {
     expect(() => loadConfig({
       NODE_ENV: 'production', DATABASE_URL: 'postgres://localhost/test', PUBLIC_BASE_URL: 'https://campaign.example',
     })).toThrow('CAMPAIGN_ASSET_STORAGE_DIR');
+    expect(loadConfig({
+      NODE_ENV: 'test', DATABASE_URL: 'postgres://localhost/test', PUBLIC_BASE_URL: 'https://campaign.example',
+      ADMIN_ORIGIN: 'http://127.0.0.1:3000',
+    })).toMatchObject({ PUBLIC_BASE_URL: 'https://campaign.example', ADMIN_ORIGIN: 'http://127.0.0.1:3000' });
+    expect(() => loadConfig({
+      NODE_ENV: 'test', DATABASE_URL: 'postgres://localhost/test', ADMIN_ORIGIN: 'http://127.0.0.1:3000/admin',
+    })).toThrow();
+    expect(() => loadConfig({
+      NODE_ENV: 'test', DATABASE_URL: 'postgres://localhost/test', ADMIN_ORIGIN: 'ftp://127.0.0.1:3000',
+    })).toThrow();
   });
 
   it('serves health without requiring database I/O', async () => {
@@ -81,6 +91,7 @@ describe('HTTP boundary', () => {
     };
     const app = buildServer(loadConfig({
       NODE_ENV: 'test', DATABASE_URL: 'postgres://localhost/test', CAMPAIGN_ASSET_STORAGE_DIR: directory,
+      PUBLIC_BASE_URL: 'https://campaign.example', ADMIN_ORIGIN: 'http://127.0.0.1:3000',
     }), db as never);
     servers.push(app);
 
@@ -130,7 +141,7 @@ describe('HTTP boundary', () => {
     });
     const accepted = await app.inject({
       method: 'POST', url: '/api/admin/campaign-assets',
-      headers: { ...headers, 'x-csrf-token': 'valid-csrf' }, payload: image,
+      headers: { ...headers, host: '127.0.0.1:3000', origin: 'http://127.0.0.1:3000', 'x-csrf-token': 'valid-csrf' }, payload: image,
     });
     expect(denied.statusCode).toBe(403);
     expect(accepted.statusCode).toBe(200);

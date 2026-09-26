@@ -15,6 +15,7 @@ const envSchema = z.object({
   CAMPAIGN_ASSET_STORAGE_DIR: z.string().default('work/campaign-assets'),
   EVIDENCE_RETENTION_DAYS: z.coerce.number().int().positive().default(180),
   PUBLIC_BASE_URL: z.preprocess((value) => value === '' ? undefined : value, z.string().url().optional()),
+  ADMIN_ORIGIN: z.preprocess((value) => value === '' ? undefined : value, z.string().url().optional()),
 }).superRefine((config, context) => {
   if (config.NODE_ENV === 'production' && !config.PUBLIC_BASE_URL) {
     context.addIssue({ code: 'custom', path: ['PUBLIC_BASE_URL'], message: 'PUBLIC_BASE_URL is required in production mode.' });
@@ -35,6 +36,15 @@ const envSchema = z.object({
     }
     if (config.NODE_ENV === 'production' && url.protocol !== 'https:') {
       context.addIssue({ code: 'custom', path: ['PUBLIC_BASE_URL'], message: 'PUBLIC_BASE_URL must use HTTPS in production mode.' });
+    }
+  }
+  if (config.ADMIN_ORIGIN) {
+    const url = new URL(config.ADMIN_ORIGIN);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      context.addIssue({ code: 'custom', path: ['ADMIN_ORIGIN'], message: 'ADMIN_ORIGIN must use HTTP or HTTPS.' });
+    }
+    if (url.pathname !== '/' || url.search || url.hash || url.username || url.password) {
+      context.addIssue({ code: 'custom', path: ['ADMIN_ORIGIN'], message: 'ADMIN_ORIGIN must be an origin without a path, credentials, query, or fragment.' });
     }
   }
 });

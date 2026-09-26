@@ -8,7 +8,7 @@ For the offline Admin-only acceptance target, do **not** follow the LINE OA step
 
 | Item | Owner setup |
 |---|---|
-| Host and HTTPS | A staging hostname with DNS and a TLS-terminating reverse proxy. The public URL must be reachable by LINE over HTTPS. Configure `PUBLIC_BASE_URL` to the exact origin only, for example `https://staging.example.test` (no path or trailing application route). Configure the LINE webhook endpoint as `https://staging.example.test/webhooks/line`. |
+| Host and HTTPS | A staging hostname with DNS and a TLS-terminating reverse proxy. The public URL must be reachable by LINE over HTTPS. Configure `PUBLIC_BASE_URL` to the exact public image origin only, for example `https://staging.example.test` (no path or trailing application route). Configure the LINE webhook endpoint as `https://staging.example.test/webhooks/line`. Keep `/admin` and `/api/admin/` off the public proxy; when Admin is accessed through an SSH local-forward, set `ADMIN_ORIGIN` to the browser origin such as `http://127.0.0.1:3000`. |
 | PostgreSQL | A dedicated PostgreSQL database and least-privilege application role, separate from every production/shared database. Make an initial backup and prove restore into a separate disposable database. |
 | LINE OA | A dedicated test LINE Official Account / Messaging API channel, with a designated test user. Enable its webhook and configure the staging URL in LINE Developers Console. Do not use a customer-facing OA. |
 | Secrets | Supply `DATABASE_URL`, `LINE_CHANNEL_SECRET`, and `LINE_CHANNEL_ACCESS_TOKEN` through the staging host's secret manager/environment injection. Never paste values into chat, commit them, put them in workflow YAML, or include them in logs. |
@@ -27,7 +27,7 @@ The current evidence adapter is local private filesystem storage, suitable for d
 6. In LINE Developers Console for the **test** channel, set webhook URL to `https://<staging-host>/webhooks/line`, enable webhook delivery, and use its verification function. Check that a valid event is accepted and that an invalid signature is rejected. Never use a real customer channel.
 7. Sign into `/admin`. Create or duplicate a **test-only** campaign from a template. Use only destinations and artwork controlled for testing. Confirm messages, button IDs, activities, dates, limits, reward labels, and evidence outcome copy. Publish only in staging, then verify the UI marks it active. This guide does not create or publish the campaign for you.
 
-The public `PUBLIC_BASE_URL` is used for Admin Origin/CSRF checks behind a TLS-terminating proxy. Do not make the app trust arbitrary forwarded host/protocol headers. Production-mode configuration requires an HTTPS origin.
+`PUBLIC_BASE_URL` is used to construct publicly reachable campaign image URLs; it is not the private Admin origin. `ADMIN_ORIGIN` optionally pins the origin accepted for Admin login and mutating requests; if omitted, the app derives it from the request host and protocol. Do not make the app trust arbitrary forwarded host/protocol headers. Production-mode configuration requires `PUBLIC_BASE_URL` to be an HTTPS origin.
 
 ## End-to-end administrator test
 

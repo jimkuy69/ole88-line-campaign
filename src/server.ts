@@ -70,7 +70,7 @@ export function buildServer(config: ReturnType<typeof loadConfig>, db: Db, proce
     }
   });
   registerAdminRoutes(app, db, config.NODE_ENV === 'production',new FileSystemEvidenceStorage(config.EVIDENCE_STORAGE_DIR),
-    new CampaignAssetStorage(config.CAMPAIGN_ASSET_STORAGE_DIR),config.PUBLIC_BASE_URL,config.ADMIN_ONLY);
+    new CampaignAssetStorage(config.CAMPAIGN_ASSET_STORAGE_DIR),config.PUBLIC_BASE_URL,config.ADMIN_ONLY,config.ADMIN_ORIGIN);
 
   app.post('/webhooks/line', async (request, reply) => {
     if (config.ADMIN_ONLY) return reply.code(503).send({ error: 'LINE webhook processing is disabled in ADMIN_ONLY mode' });
