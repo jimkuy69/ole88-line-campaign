@@ -45,6 +45,7 @@ export function registerAdminRoutes(app:FastifyInstance, db:Db, isProduction:boo
   const evidence=new EvidenceService(db,{getMessageContent:async()=>{throw new Error('Evidence media retrieval is worker-only.')}},evidenceStorage);
   const analytics=new AnalyticsService(db);
   app.get('/admin',async(_request,reply)=>reply.header('content-type','text/html; charset=utf-8').header('content-security-policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'").send(await readFile(resolve(publicRoot,'admin.html'))));
+  app.get('/admin-i18n.js',async(_request,reply)=>reply.header('content-type','text/javascript; charset=utf-8').header('x-content-type-options','nosniff').send(await readFile(resolve(publicRoot,'admin-i18n.js'))));
   app.get('/admin.js',async(_request,reply)=>reply.header('content-type','text/javascript; charset=utf-8').header('x-content-type-options','nosniff').send(await readFile(resolve(publicRoot,'admin.js'))));
   app.get('/admin.css',async(_request,reply)=>reply.header('content-type','text/css; charset=utf-8').send(await readFile(resolve(publicRoot,'admin.css'))));
   app.post('/api/admin/login',async(request,reply)=>{

@@ -21,6 +21,16 @@ describe('HTTP boundary', () => {
     expect(response.json()).toEqual({ status: 'ok' });
   });
 
+  it('serves the admin localization script with a JavaScript content type', async () => {
+    const app = buildServer(loadConfig({ NODE_ENV: 'test', DATABASE_URL: 'postgres://localhost/test' }), {} as never);
+    servers.push(app);
+    const response = await app.inject({ method: 'GET', url: '/admin-i18n.js' });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('text/javascript');
+    expect(response.headers['x-content-type-options']).toBe('nosniff');
+    expect(response.body).toContain('languageToggle');
+  });
+
   it('reports readiness only when PostgreSQL responds, without leaking connection details', async () => {
     const ready = buildServer(loadConfig({ NODE_ENV: 'test', DATABASE_URL: 'postgres://localhost/test' }),
       { execute: vi.fn().mockResolvedValue({ rows: [{ '?column?': 1 }] }) } as never);
