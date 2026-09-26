@@ -31,10 +31,7 @@ renderHero = () => {
   renderHeroBase();
   const url = state?.campaign.settings?.secondaryImage;
   if (!url) return;
-  const image = el('img', { src: url, alt: 'Secondary campaign image preview' });
-  image.style.maxHeight = '400px';
-  image.style.maxWidth = '100%';
-  image.style.objectFit = 'contain';
+  const image = el('img', { src: url, alt: 'Secondary campaign image preview', className: 'campaign-image-preview' });
   image.onerror = () => image.remove();
   $('heroPreview').append(image);
 };
@@ -63,10 +60,7 @@ drawPreview = (box, title, messages) => {
     ? message.contents.body?.contents || []
     : []).find(content => content.type === 'image')?.url;
   if (!imageUrl) return;
-  const image = el('img', { src: imageUrl, alt: 'Secondary campaign image preview' });
-  image.style.maxHeight = '400px';
-  image.style.maxWidth = '100%';
-  image.style.objectFit = 'contain';
+  const image = el('img', { src: imageUrl, alt: 'Secondary campaign image preview', className: 'campaign-image-preview' });
   image.onerror = () => image.remove();
   box.lastElementChild.append(image);
 };

@@ -170,10 +170,12 @@
         map.hotspots.forEach((hotspot, areaIndex) => {
           const target = targetFromHotspot(hotspot);
           const overlay = el('div', { className: `hotspot-area${selectedAreas.get(mapIndex) === areaIndex ? ' is-selected' : ''}` });
+          overlay.dataset.mapIndex = String(mapIndex);
+          overlay.dataset.areaIndex = String(areaIndex);
           overlay.tabIndex = 0;
           overlay.setAttribute('role', 'button');
           overlay.setAttribute('aria-label', `Touch area ${areaIndex + 1}: ${hotspot.targetType} ${hotspot.targetKey}`);
-          Object.assign(overlay.style, {
+          window.adminSetDynamicRule(`.hotspot-area[data-map-index="${mapIndex}"][data-area-index="${areaIndex}"]`, {
             left: `${hotspot.x / 10}%`, top: `${hotspot.y / 10}%`,
             width: `${hotspot.width / 10}%`, height: `${hotspot.height / 10}%`
           });
@@ -226,7 +228,8 @@
           const bounds = frame.getBoundingClientRect();
           drawingStart = { x: event.clientX, y: event.clientY, bounds };
           frame.setPointerCapture(event.pointerId);
-          draftArea = el('div', { className: 'hotspot-area is-pending' });
+          draftArea = el('div', { className: 'hotspot-area is-pending hotspot-area-draft' });
+          draftArea.dataset.mapIndex = String(mapIndex);
           frame.append(draftArea);
           event.preventDefault();
         });
@@ -241,7 +244,7 @@
           const top = Math.max(0, Math.min(drawingStart.y, event.clientY) - bounds.top);
           const right = Math.min(bounds.width, Math.max(drawingStart.x, event.clientX) - bounds.left);
           const bottom = Math.min(bounds.height, Math.max(drawingStart.y, event.clientY) - bounds.top);
-          Object.assign(draftArea.style, {
+          window.adminSetDynamicRule(`.hotspot-area-draft[data-map-index="${mapIndex}"]`, {
             left: `${100 * left / bounds.width}%`, top: `${100 * top / bounds.height}%`,
             width: `${100 * (right - left) / bounds.width}%`, height: `${100 * (bottom - top) / bounds.height}%`
           });
@@ -350,7 +353,7 @@
       hotspot.height = Math.max(1, Math.min(1000 - hotspot.y, drag.original.height + dy));
     }
     const overlay = drag.overlay;
-    if (overlay) Object.assign(overlay.style, {
+    if (overlay) window.adminSetDynamicRule(`.hotspot-area[data-map-index="${drag.mapIndex}"][data-area-index="${drag.areaIndex}"]`, {
       left: `${hotspot.x / 10}%`, top: `${hotspot.y / 10}%`,
       width: `${hotspot.width / 10}%`, height: `${hotspot.height / 10}%`
     });

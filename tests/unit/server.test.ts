@@ -43,6 +43,16 @@ describe('HTTP boundary', () => {
     expect(response.json()).toEqual({ status: 'ok' });
   });
 
+  it('keeps the Admin CSP strict while serving the stylesheet used for dynamic layout rules', async () => {
+    const app = buildServer(loadConfig({ NODE_ENV: 'test', DATABASE_URL: 'postgres://localhost/test' }), {} as never);
+    servers.push(app);
+    const response = await app.inject({ method: 'GET', url: '/admin' });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-security-policy']).toContain("style-src 'self'");
+    expect(response.headers['content-security-policy']).not.toContain("'unsafe-inline'");
+    expect(response.body).not.toMatch(/\sstyle\s*=/i);
+  });
+
   it('serves the admin localization script with a JavaScript content type', async () => {
     const app = buildServer(loadConfig({ NODE_ENV: 'test', DATABASE_URL: 'postgres://localhost/test' }), {} as never);
     servers.push(app);
