@@ -57,6 +57,23 @@ describe('LINE adapter foundation', () => {
       .rejects.toMatchObject({ status: 401, message: 'LINE Messaging API request failed with status 401' });
   });
 
+  it('aborts uncertain LINE reply and push requests after the configured timeout', async () => {
+    const requests: Array<{ url: string; signal: AbortSignal }> = [];
+    const fetchMock: typeof fetch = (input, init) => new Promise((_resolve, reject) => {
+      const signal = init?.signal as AbortSignal;
+      requests.push({ url: String(input), signal });
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    });
+    const client = new LineMessagingClient('timeout-test-token', fetchMock, 5);
+
+    await expect(client.replyMessage('one-time-token', [{ type: 'text', text: 'hello' }]))
+      .rejects.toMatchObject({ name: 'TimeoutError' });
+    await expect(client.pushMessage('line-user', [{ type: 'text', text: 'review result' }], 'persisted-retry-key'))
+      .rejects.toMatchObject({ name: 'TimeoutError' });
+    expect(requests).toHaveLength(2);
+    expect(requests.every((request) => request.signal.aborted)).toBe(true);
+  });
+
   it('fetches image content from the official data API using the webhook message ID and bounds payload size', async () => {
     let url='';let authorization='';
     const client=new LineMessageContentClient('content-test-token',async(input,init)=>{

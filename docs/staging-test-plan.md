@@ -2,6 +2,8 @@
 
 This guide is for an isolated **test-only** deployment. It is not a production deployment procedure. Use a dedicated test LINE Official Account, test users, a separate PostgreSQL database, and test campaign content. Never point this environment at production data or an OA used by customers.
 
+For the offline Admin-only acceptance target, do **not** follow the LINE OA steps below: configure `ADMIN_ONLY=true`, omit LINE credentials, bind the app to loopback, and verify draft/review/dashboard flows with labeled synthetic fixtures. Webhook processing and campaign publish are disabled in this mode. The presence of an active campaign is a staging setup failure; do not try to pause/publish campaigns as part of Admin-only acceptance. The interactive LINE end-to-end section is a distinct future test requiring an authorized test OA and is explicitly outside the Admin-only completion gate.
+
 ## Staging prerequisites
 
 | Item | Owner setup |

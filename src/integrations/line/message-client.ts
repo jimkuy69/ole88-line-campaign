@@ -18,6 +18,7 @@ export class LineMessagingClient implements LineMessagingClientPort {
   constructor(
     private readonly channelAccessToken: string,
     private readonly fetchImpl: typeof fetch = fetch,
+    private readonly requestTimeoutMs = 15_000,
   ) {}
 
   replyMessage(replyToken: string, messages: LineMessageObject[]) {
@@ -38,6 +39,7 @@ export class LineMessagingClient implements LineMessagingClientPort {
         ...(retryKey ? { 'X-Line-Retry-Key': retryKey } : {}),
       },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(this.requestTimeoutMs),
     });
     if (!response.ok) throw new LineApiError(response.status);
   }

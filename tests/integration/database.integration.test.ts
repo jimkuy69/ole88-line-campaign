@@ -17,6 +17,7 @@ import { loadConfig } from '../../src/config/env.js';
 import { EvidenceService } from '../../src/modules/evidence/evidence-service.js';
 import { FileSystemEvidenceStorage } from '../../src/modules/evidence/storage.js';
 import { AnalyticsService } from '../../src/modules/admin/analytics-service.js';
+import { bangkokDateRange } from '../../src/modules/admin/bangkok-date-range.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -179,6 +180,8 @@ integration('PostgreSQL foundation constraints', () => {
       await service.decide(second.evidence.id,'admin-id','APPROVED',second.evidence.version);
       expect((await db.select().from(schema.claims).where(eq(schema.claims.id,claim!.id)))[0]!.status).toBe('APPROVED');
       expect((await db.select().from(schema.claims).where(eq(schema.claims.id,claim!.id)))[0]!.status).not.toBe('REWARD_SENT');
+      const queuedNotifications=await db.select().from(schema.outboundMessages).where(eq(schema.outboundMessages.deliveryType,'PUSH'));
+      expect(queuedNotifications.every((row)=>row.campaignId===campaign!.id&&row.purpose==='EVIDENCE_DECISION')).toBe(true);
       const retryKeys:string[]=[];
       const pushWorker=new WebhookEventProcessor(db,{sendReply:async()=>undefined,sendToUser:async(_user,_messages,retryKey)=>{retryKeys.push(retryKey!)} });
       await pushWorker.processReadyPushes();
@@ -188,6 +191,25 @@ integration('PostgreSQL foundation constraints', () => {
       expect(new Set(retryKeys).size).toBe(3);
       expect(notifications.map((row)=>row.retryKey).sort()).toEqual([...retryKeys].sort());
     } finally { await rm(scratch,{recursive:true,force:true}); }
+  });
+
+  it('filters review dates on Bangkok calendar days with a half-open interval', async () => {
+    const [campaign]=await db.insert(schema.campaigns).values({code:'REVIEW_DATE_RANGE',name:'Review range',templateType:'ACTIVITY'}).returning();
+    const [activity]=await db.insert(schema.campaignActivities).values({campaignId:campaign!.id,activityKey:'PROOF',title:'Proof',actionType:'URI'}).returning();
+    const [user]=await db.insert(schema.users).values({}).returning();
+    const [identity]=await db.insert(schema.channelIdentities).values({userId:user!.id,channel:'LINE',externalUserId:'review-range-user'}).returning();
+    const [claim]=await db.insert(schema.claims).values({userId:user!.id,campaignId:campaign!.id,claimCode:'REVIEW_RANGE_CLAIM'}).returning();
+    const [progress]=await db.insert(schema.claimActivities).values({claimId:claim!.id,campaignActivityId:activity!.id}).returning();
+    const evidence=await db.insert(schema.evidence).values([
+      {claimId:claim!.id,claimActivityId:progress!.id,userId:user!.id,channelIdentityId:identity!.id,type:'image/png',storageKey:'before.png',sourceMessageId:'review-before',status:'SUBMITTED',createdAt:new Date('2026-09-25T16:59:59.999Z')},
+      {claimId:claim!.id,claimActivityId:progress!.id,userId:user!.id,channelIdentityId:identity!.id,type:'image/png',storageKey:'start.png',sourceMessageId:'review-start',status:'SUBMITTED',createdAt:new Date('2026-09-25T17:00:00.000Z')},
+      {claimId:claim!.id,claimActivityId:progress!.id,userId:user!.id,channelIdentityId:identity!.id,type:'image/png',storageKey:'last.png',sourceMessageId:'review-last',status:'SUBMITTED',createdAt:new Date('2026-09-26T16:59:59.999Z')},
+      {claimId:claim!.id,claimActivityId:progress!.id,userId:user!.id,channelIdentityId:identity!.id,type:'image/png',storageKey:'end.png',sourceMessageId:'review-end',status:'SUBMITTED',createdAt:new Date('2026-09-26T17:00:00.000Z')},
+    ]).returning();
+    const range=bangkokDateRange('2026-09-26','2026-09-26');
+    const rows=await new EvidenceService(db,{getMessageContent:async()=>{throw new Error('unused');}},{put:async()=>undefined,read:async()=>Buffer.alloc(0),delete:async()=>undefined})
+      .listQueue({...(range.from?{from:range.from}:{}),...(range.to?{to:range.to}:{})});
+    expect(rows.map((row)=>row.evidence.id)).toEqual([evidence[2]!.id,evidence[1]!.id]);
   });
 
   it('deduplicates concurrent evidence event processing and version-checks competing Admin decisions', async () => {
@@ -229,6 +251,9 @@ integration('PostgreSQL foundation constraints', () => {
       expect(missingCsrf.statusCode).toBe(403);
       const queue=await app.inject({method:'GET',url:'/api/admin/reviews',headers});
       expect(queue.statusCode).toBe(200);
+      const rawToken=decodeURIComponent(cookie.split(';')[0]!.split('=').slice(1).join('='));
+      await db.update(schema.adminSessions).set({expiresAt:new Date(Date.now()-1000)}).where(eq(schema.adminSessions.tokenHash,sha256(rawToken)));
+      expect((await app.inject({method:'GET',url:'/api/admin/reviews',headers})).statusCode).toBe(401);
     } finally { await app.close(); }
   });
 
@@ -244,6 +269,24 @@ integration('PostgreSQL foundation constraints', () => {
       const headers={cookie:cookie.split(';')[0]!,'x-csrf-token':(login.json() as {csrfToken:string}).csrfToken,origin:'https://staging.example.test'};
       expect((await app.inject({method:'POST',url:'/api/admin/campaigns',headers,payload:{templateId:'welcome-claim',code:'STAGING_ORIGIN'}})).statusCode).toBe(200);
       expect((await app.inject({method:'POST',url:'/api/admin/campaigns',headers:{...headers,origin:'https://attacker.example'},payload:{templateId:'welcome-claim',code:'STAGING_ATTACK'}})).statusCode).toBe(403);
+    } finally { await app.close(); }
+  });
+
+  it('keeps ADMIN_ONLY staging in draft-only mode even for authenticated publish requests', async () => {
+    const [campaign]=await db.insert(schema.campaigns).values({code:'ADMIN_ONLY_DRAFT',name:'Offline draft',templateType:'WELCOME'}).returning();
+    await new AdminAuthService(db).createFirstAdmin('offline-admin','A safe offline passphrase!');
+    const app=buildServer(loadConfig({NODE_ENV:'test',DATABASE_URL:databaseUrl!,ADMIN_ONLY:'true'}),db);
+    try {
+      const login=await app.inject({method:'POST',url:'/api/admin/login',payload:{username:'offline-admin',password:'A safe offline passphrase!'}});
+      expect(login.statusCode).toBe(200);
+      const cookieHeader=login.headers['set-cookie'];const cookie=Array.isArray(cookieHeader)?cookieHeader[0]!:cookieHeader!;
+      const headers={cookie:cookie.split(';')[0]!,'x-csrf-token':(login.json() as {csrfToken:string}).csrfToken};
+      expect((await app.inject({method:'GET',url:'/api/admin/status',headers})).json()).toEqual({adminOnly:true});
+      const response=await app.inject({method:'POST',url:`/api/admin/campaigns/${campaign!.id}/publish`,headers,payload:{expectedVersion:1}});
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toMatchObject({code:'ADMIN_ONLY_MODE'});
+      expect((await db.select().from(schema.campaigns).where(eq(schema.campaigns.id,campaign!.id)))[0]!.status).toBe('DRAFT');
+      expect(await db.select().from(schema.campaigns).where(eq(schema.campaigns.status,'ACTIVE'))).toHaveLength(0);
     } finally { await app.close(); }
   });
 

@@ -14,13 +14,15 @@ Campaign codes, message copy, activities, buttons, and actions are data-driven. 
 
 ## Outbound delivery and retry safety
 
-Each reply is recorded in `outbound_messages` with a unique provider-event dedupe key and statuses `READY`, `SENDING`, `SENT`, `FAILED`, or `UNCERTAIN`. The sender changes READY to SENDING with a database compare-and-set before the network call. Successful responses become SENT. Definitive 4xx responses become FAILED. Network errors, 5xx responses, and a crash after SENDING become UNCERTAIN, clear the single-use reply token, and are never retried automatically. A crash with no outbound row resumes event processing; a persisted READY row is sent from its stored payload after restart; SENDING is never sent again. The processor logs only an error name on cycle failure and never logs tokens.
+Each reply is recorded in `outbound_messages` with a unique provider-event dedupe key and statuses `READY`, `SENDING`, `SENT`, `FAILED`, or `UNCERTAIN`. The sender changes READY to SENDING with a database compare-and-set before the network call. Reply and push HTTP requests have a 15-second abort timeout. Successful responses become SENT. Definitive 4xx responses become FAILED. Timeouts, other network errors, 5xx responses, and a crash after SENDING become UNCERTAIN, clear the single-use reply token, and are never retried automatically. A crash with no outbound row resumes event processing; a persisted READY row is sent from its stored payload after restart; SENDING is never sent again. The processor logs only an error name on cycle failure and never logs tokens.
 
 This conservative behavior is necessary because LINE reply tokens can only be used once and reply requests do not support `X-Line-Retry-Key`. LINE supports retry keys for selected push/broadcast-style APIs, but that capability is not used by this reply-based Phase 2 flow. A new user action produces a new event and reply token. Do not replay `UNCERTAIN` or stale `SENDING` rows automatically.
 
 Activity card content is built from enabled campaign activities. Publish validation requires real HTTPS destinations for URI actions, including a configured hero image, and complete action/message configuration; seed links stay empty and the example campaign remains a draft. Active campaign and child-content mutations are serialized by parent-row locks and database triggers; pause to create an editable draft.
 
 The rendered welcome uses two message objects (welcome text + one campaign bubble). The reply API accepts at most five message objects. The Flex alt text stays under 1,500 characters and bubble JSON is checked against LINE's 30 KB limit. A single bubble is used, so carousel limits do not apply.
+
+The server runs at most one processor cycle at a time and waits up to five seconds for an active cycle during graceful shutdown. `ADMIN_ONLY=true` disables the cycle entirely and rejects webhook intake and Admin publish requests.
 
 ## Official references (checked 2026-09-26)
 

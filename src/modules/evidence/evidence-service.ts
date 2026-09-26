@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, isNotNull, isNull, lte } from 'drizzle-orm';
+import { and, desc, eq, gt, gte, isNotNull, isNull, lt, lte } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import * as schema from '../../db/schema.js';
 import { assertClaimTransition, type ClaimState } from '../../domain/claim-state.js';
@@ -113,8 +113,8 @@ export class EvidenceService {
     const clauses = [isNotNull(schema.evidence.claimActivityId),isNotNull(schema.evidence.channelIdentityId)];
     if(filters.campaignId)clauses.push(eq(schema.claims.campaignId,filters.campaignId));
     if(filters.status)clauses.push(eq(schema.evidence.status,filters.status));
-    if(filters.from)clauses.push(gt(schema.evidence.createdAt,filters.from));
-    if(filters.to)clauses.push(lte(schema.evidence.createdAt,filters.to));
+    if(filters.from)clauses.push(gte(schema.evidence.createdAt,filters.from));
+    if(filters.to)clauses.push(lt(schema.evidence.createdAt,filters.to));
     return this.db.select({evidence:schema.evidence,claim:schema.claims,campaign:schema.campaigns,activity:schema.campaignActivities,
       identity:schema.channelIdentities}).from(schema.evidence).innerJoin(schema.claims,eq(schema.claims.id,schema.evidence.claimId))
       .innerJoin(schema.campaigns,eq(schema.campaigns.id,schema.claims.campaignId))
@@ -182,7 +182,8 @@ export class EvidenceService {
       if(message&&identity){
         const text=decision==='REJECTED'?message.content.replaceAll('{{reason}}',reason!.trim()):message.content;
         const dedupeKey=`evidence-decision:${evidenceId}:${updated.version}`;
-        await tx.insert(schema.outboundMessages).values({dedupeKey,deliveryType:'PUSH',recipientLineUserId:identity.externalUserId,replyToken:null,
+        await tx.insert(schema.outboundMessages).values({dedupeKey,deliveryType:'PUSH',campaignId:claim.campaignId,purpose:'EVIDENCE_DECISION',
+          recipientLineUserId:identity.externalUserId,replyToken:null,
           messages:[{type:'text',text}],status:'READY'}).onConflictDoNothing({target:schema.outboundMessages.dedupeKey});
       }
       await tx.insert(schema.auditLogs).values({actorType:'ADMIN',actorId,action:decision==='APPROVED'?'EVIDENCE_APPROVED':'EVIDENCE_REJECTED',

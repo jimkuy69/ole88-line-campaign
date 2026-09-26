@@ -51,3 +51,19 @@ Valid statuses: `TODO`, `IN_PROGRESS`, `BLOCKED`, `DONE`.
 - Create a dedicated test LINE OA/channel and designate a test user.
 - Configure database and LINE credentials in the staging secret manager (do not send them in chat), private persistent evidence storage, and the initial Admin.
 - Prepare campaign copy/artwork/destinations for a test-only campaign in Admin; verify the complete flow with the test OA before considering production readiness.
+
+## Admin staging closeout — 2026-09-26
+
+This closeout is tracked separately from the completed product phases above. The baseline remains commit `61b56699bdccf443cbc51ea6b539aa7fc1ceeac1`; the 47-test result above is historical baseline evidence and has not been replaced or restated as validation of new changes.
+
+| Track | Status | Evidence / remaining work |
+|---|---|---|
+| Code hardening | IMPLEMENTED / LOCAL CHECKS PASS | Add bounded DB readiness, opt-in `ADMIN_ONLY`, non-overlapping worker cycles with bounded shutdown, 15-second LINE send timeout, Bangkok Review day filtering, and campaign-attributed Review outbox; VPS configuration and browser behavior remain unverified |
+| Automated tests | PASS (LOCAL, 2026-09-26) | 56 passed across 9 files, 0 skipped on a fresh loopback-only PostgreSQL 18 disposable cluster/database `ole88_test`; fresh and repeat migrations, typecheck, build, lint, Admin JS syntax, and diff checks passed |
+| VPS staging | NOT STARTED | Read-only host inspection first; OS-specific package/security work, PostgreSQL least-privilege setup, exact-commit deployment, systemd, restricted environment/evidence paths, and owner-created Admin remain outstanding |
+| Admin browser acceptance | NOT STARTED | Synthetic data only; verify desktop/mobile workflows, expired session, protected image, filters, version conflict, and enforced no-publish mode |
+| Backup/reboot/restore | NOT STARTED | Paired private database/evidence backups, seven daily sets, reboot recovery, and isolated `ole88_restore_test` rehearsal |
+| External prerequisites | DEFERRED | HTTPS domain, LINE OA/credentials, production private object storage and rewards are outside Admin-only staging and remain explicitly disabled |
+| Incident and provider follow-up | NOT STARTED | Preserve date/timezone and necessary original July 14 log text; keep `gil-u26` systemd-stop fact distinct from login evidence; ask Kamatera about initiator and Console/API/maintenance audit records |
+
+Detailed scope and safety limits: [docs/project-completion-plan.md](docs/project-completion-plan.md). Dated evidence and the current acceptance result: [docs/staging-verification-report.md](docs/staging-verification-report.md). No stage is marked passed until its evidence is recorded.

@@ -8,6 +8,8 @@ const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   LINE_CHANNEL_SECRET: z.string().optional(),
   LINE_CHANNEL_ACCESS_TOKEN: z.string().optional(),
+  ADMIN_ONLY: z.preprocess((value) => value === 'true' ? true : value === 'false' ? false : value,
+    z.boolean()).default(false),
   EVIDENCE_STORAGE_DIR: z.string().default('work/evidence'),
   EVIDENCE_RETENTION_DAYS: z.coerce.number().int().positive().default(180),
   PUBLIC_BASE_URL: z.preprocess((value) => value === '' ? undefined : value, z.string().url().optional()),

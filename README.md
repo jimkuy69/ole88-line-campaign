@@ -16,10 +16,12 @@ Reusable campaign foundation. Campaign configuration is data; campaign-specific 
 3. Install packages with `npm install`.
 4. Apply migrations with `npm run db:migrate`.
 5. Load the example draft campaign with `npm run db:seed`.
-6. Start the API with `npm run dev`; `GET /health` is available for a local health check.
+6. Start the API with `npm run dev`; `GET /health` checks the process and `GET /ready` checks PostgreSQL readiness.
 7. Create the first Admin account from an interactive terminal with `npm run admin:create`, then open `http://127.0.0.1:3000/admin`.
 
 No real credentials or campaign destinations are included. Configure the LINE channel secret only in a local secret store or environment variable. Never commit `.env`.
+
+For an isolated Admin-only staging instance with no LINE account or credentials, set `ADMIN_ONLY=true`, `NODE_ENV=development`, `HOST=127.0.0.1`, and `PUBLIC_BASE_URL=http://127.0.0.1:3000`. In this mode the server does not run the webhook worker, rejects webhook requests, and rejects campaign publishing; draft management, review, and dashboard APIs remain available. Use an SSH local-forward rather than exposing the application port. The mode status is shown in Admin. Do not start this mode with an active campaign; verify the database contains no `ACTIVE` campaign.
 
 Integration tests destructively recreate the `public` schema and clear the Drizzle migration journal before migrating. Use a dedicated, disposable local database whose name includes `test`; the test suite rejects non-local hosts or database names without that marker. Never point `TEST_DATABASE_URL` at production or a shared database.
 
@@ -37,6 +39,8 @@ Integration tests destructively recreate the `public` schema and clear the Drizz
 | `npm run db:seed` | Insert idempotent draft example data |
 | `npm run admin:create` | Interactively create the first admin (password is hidden; no default account) |
 | `npm run test:integration` | Run PostgreSQL integration tests when `TEST_DATABASE_URL` points to a local database with `test` in its name |
+
+`GET /health` is process-only. `GET /ready` executes a bounded PostgreSQL check and returns only `{"status":"not_ready"}` with HTTP 503 when the database cannot be reached.
 
 ## Scope
 

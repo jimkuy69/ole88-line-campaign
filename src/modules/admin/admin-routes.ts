@@ -11,6 +11,7 @@ import { templateDraftSchema } from './templates.js';
 import { EvidenceService } from '../evidence/evidence-service.js';
 import type { EvidenceStorage } from '../evidence/storage.js';
 import { AnalyticsService, InvalidAnalyticsRangeError } from './analytics-service.js';
+import { bangkokDateRange } from './bangkok-date-range.js';
 
 type Db = NodePgDatabase<typeof schema>;
 const COOKIE = 'ole88_admin_session';
@@ -32,7 +33,7 @@ const publicRoot=resolve(process.cwd(),'public');
 const usernameSchema=z.string().trim().min(3).max(120).regex(/^[A-Za-z0-9_.@-]+$/);
 const codeSchema=z.string().regex(/^[A-Za-z0-9_-]{2,100}$/);
 
-export function registerAdminRoutes(app:FastifyInstance, db:Db, isProduction:boolean, evidenceStorage:EvidenceStorage, publicBaseUrl?:string) {
+export function registerAdminRoutes(app:FastifyInstance, db:Db, isProduction:boolean, evidenceStorage:EvidenceStorage, publicBaseUrl?:string, adminOnly=false) {
   app.addHook('onSend',async(request,reply,payload)=>{
     if(request.url.startsWith('/admin')||request.url.startsWith('/api/admin/')){
       reply.header('cache-control','no-store');reply.header('referrer-policy','no-referrer');reply.header('x-content-type-options','nosniff');
@@ -70,6 +71,7 @@ export function registerAdminRoutes(app:FastifyInstance, db:Db, isProduction:boo
     try{return await action(session);}catch(error){return sendError(reply,error);}
   };
   app.get('/api/admin/templates',(req,rep)=>route(req,rep,async()=>({templates:campaigns.templates()})));
+  app.get('/api/admin/status',(req,rep)=>route(req,rep,async()=>({adminOnly})));
   app.get('/api/admin/campaigns',(req,rep)=>route(req,rep,async()=>({campaigns:await campaigns.list()})));
   app.post('/api/admin/campaigns',(req,rep)=>route(req,rep,async(session)=>{
     const data=z.object({templateId:z.string().min(1),code:codeSchema}).safeParse(body(req));if(!data.success)return rep.code(400).send({error:'Invalid input.',details:data.error.issues});
@@ -91,6 +93,7 @@ export function registerAdminRoutes(app:FastifyInstance, db:Db, isProduction:boo
     return campaigns.preview(normalizeDraft(data.data));
   }));
   app.post('/api/admin/campaigns/:id/publish',(req,rep)=>route(req,rep,async(session)=>{
+    if(adminOnly)return rep.code(403).send({error:'Publishing is disabled in ADMIN_ONLY mode.',code:'ADMIN_ONLY_MODE'});
     const data=z.object({expectedVersion:z.number().int().positive(),draft:templateDraftSchema.optional()}).safeParse(body(req));if(!data.success)return rep.code(400).send({error:'Invalid input.',details:data.error.issues});
     const id=(req.params as {id:string}).id;
     return data.data.draft
@@ -102,10 +105,11 @@ export function registerAdminRoutes(app:FastifyInstance, db:Db, isProduction:boo
     return campaigns.pause((req.params as {id:string}).id,session.user.id,data.data.expectedVersion);
   }));
   app.get('/api/admin/reviews',(req,rep)=>route(req,rep,async()=>{
-    const query=z.object({campaignId:z.string().uuid().optional(),status:z.enum(['SUBMITTED','APPROVED','REJECTED']).optional(),from:z.string().datetime({offset:true}).optional(),to:z.string().datetime({offset:true}).optional()}).safeParse(req.query);
+    const query=z.object({campaignId:z.string().uuid().optional(),status:z.enum(['SUBMITTED','APPROVED','REJECTED']).optional(),from:z.iso.date().optional(),to:z.iso.date().optional()}).safeParse(req.query);
     if(!query.success)return rep.code(400).send({error:'Invalid review filters.'});
+    const range=bangkokDateRange(query.data.from,query.data.to);
     return {items:await evidence.listQueue({...(query.data.campaignId?{campaignId:query.data.campaignId}:{}),...(query.data.status?{status:query.data.status}:{}),
-      ...(query.data.from?{from:new Date(query.data.from)}:{}),...(query.data.to?{to:new Date(query.data.to)}:{})})};
+      ...(range.from?{from:range.from}:{}),...(range.to?{to:range.to}:{})})};
   }));
   app.get('/api/admin/review-campaigns',(req,rep)=>route(req,rep,async()=>({campaigns:await campaigns.list()})));
   app.get('/api/admin/analytics',(req,rep)=>route(req,rep,async()=>{

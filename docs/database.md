@@ -20,7 +20,7 @@ The Drizzle schema is in `src/db/schema.ts`; versioned migrations are in `drizzl
 | `tracking_events` | Provider-neutral interaction events | Indexed by campaign/time |
 | `audit_logs` | Actor and entity change record | Indexed by entity/time |
 | `webhook_events` | Durable inbound event inbox | Unique `(channel, provider_event_id)`; attempt timing and lease timestamps; indexed by status/next attempt |
-| `outbound_messages` | Durable LINE reply ledger | Unique `dedupe_key`; indexed by status/time; records READY/SENDING/SENT/FAILED/UNCERTAIN and send-start time |
+| `outbound_messages` | Durable LINE reply/push ledger | Unique `dedupe_key`; indexed by status/time and campaign/purpose; records READY/SENDING/SENT/FAILED/UNCERTAIN and send-start time |
 
 Migration `0003_campaign_content_lock.sql` adds triggers that lock the parent campaign on button/activity/message writes and reject content mutation while the campaign is ACTIVE. `CampaignService.publishCampaign()` locks the campaign before reading child rows and setting ACTIVE in one transaction. Changes can be made after pausing, then publication validation must pass again. Integration tests recreate the dedicated local test schema from empty and apply all journaled migrations before each suite.
 
