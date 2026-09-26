@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 const imageHotspotSchema = z.object({
+  id: z.string().uuid().optional(),
   targetType: z.enum(['button', 'activity']),
   targetKey: z.string().min(1).max(100),
   x: z.number().int().min(0).max(1000),
@@ -19,9 +20,44 @@ const imageHotspotSchema = z.object({
 const imageMapSchema = z.object({
   imageUrl: z.string().url().max(2000),
   hotspots: z.array(imageHotspotSchema).max(50),
+  assetId: z.string().uuid().optional(),
+  metadata: z.object({
+    originalFilename: z.string().min(1).max(255),
+    contentType: z.enum(['image/jpeg', 'image/png']),
+    fileSizeBytes: z.number().int().positive().max(10 * 1024 * 1024),
+    width: z.number().int().positive().max(4096),
+    height: z.number().int().positive().max(4096),
+    sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  }).strict().optional(),
 }).strict();
 
-export const imageHotspotMapsSchema = z.array(imageMapSchema).max(4);
+export const imageHotspotMapsSchema = z.array(imageMapSchema).max(4).superRefine((maps, context) => {
+  const assets = new Set<string>();
+  const hotspotIds = new Set<string>();
+  maps.forEach((map, mapIndex) => {
+    if (map.assetId) {
+      if (assets.has(map.assetId)) {
+        context.addIssue({
+          code: 'custom',
+          path: [mapIndex, 'assetId'],
+          message: 'The same uploaded image cannot be added to a plan more than once.',
+        });
+      }
+      assets.add(map.assetId);
+    }
+    map.hotspots.forEach((hotspot, hotspotIndex) => {
+      if (!hotspot.id) return;
+      if (hotspotIds.has(hotspot.id)) {
+        context.addIssue({
+          code: 'custom',
+          path: [mapIndex, 'hotspots', hotspotIndex, 'id'],
+          message: 'Hotspot IDs must be unique within the image plan.',
+        });
+      }
+      hotspotIds.add(hotspot.id);
+    });
+  });
+});
 export type ImageHotspotMaps = z.infer<typeof imageHotspotMapsSchema>;
 
 type Target = { key: string; label: string; actionType: string; actionValue: string | null; enabled: boolean };
@@ -42,34 +78,4 @@ export function validateImageHotspotTargets(
     }
   }));
   return issues;
-}
-
-export function buildImageHotspotExport(
-  campaign: { code: string; title: string | null },
-  maps: ImageHotspotMaps,
-  buttons: Target[],
-  activities: Target[],
-) {
-  return {
-    format: 'ole88-image-hotspot-plan/v1',
-    campaign: { code: campaign.code, title: campaign.title },
-    images: maps.map((map) => ({
-      imageUrl: map.imageUrl,
-      hotspots: map.hotspots.map((hotspot) => {
-        const targets = hotspot.targetType === 'button' ? buttons : activities;
-        const target = targets.find((item) => item.key === hotspot.targetKey);
-        if (!target) throw new Error(`Missing hotspot target ${hotspot.targetKey}.`);
-        return {
-          area: { x: hotspot.x, y: hotspot.y, width: hotspot.width, height: hotspot.height, coordinateScale: 1000 },
-          target: {
-            type: hotspot.targetType,
-            key: hotspot.targetKey,
-            label: target.label,
-            actionType: target.actionType,
-            actionValue: target.actionValue,
-          },
-        };
-      }),
-    })),
-  };
 }

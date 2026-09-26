@@ -12,6 +12,8 @@ import { EvidenceService } from '../evidence/evidence-service.js';
 import type { EvidenceStorage } from '../evidence/storage.js';
 import { AnalyticsService, InvalidAnalyticsRangeError } from './analytics-service.js';
 import { bangkokDateRange } from './bangkok-date-range.js';
+import { CampaignAssetError, CampaignAssetStorage, CampaignAssetUploadGuard } from '../campaigns/campaign-asset-storage.js';
+import { selectorForPath, validateAndBuildCampaignImagePlan } from '../campaigns/campaign-image-plan.js';
 
 type Db = NodePgDatabase<typeof schema>;
 const COOKIE = 'ole88_admin_session';
@@ -33,7 +35,8 @@ const publicRoot=resolve(process.cwd(),'public');
 const usernameSchema=z.string().trim().min(3).max(120).regex(/^[A-Za-z0-9_.@-]+$/);
 const codeSchema=z.string().regex(/^[A-Za-z0-9_-]{2,100}$/);
 
-export function registerAdminRoutes(app:FastifyInstance, db:Db, isProduction:boolean, evidenceStorage:EvidenceStorage, publicBaseUrl?:string, adminOnly=false) {
+export function registerAdminRoutes(app:FastifyInstance, db:Db, isProduction:boolean, evidenceStorage:EvidenceStorage,
+  campaignAssetStorage:CampaignAssetStorage, publicBaseUrl?:string, adminOnly=false) {
   app.addHook('onSend',async(request,reply,payload)=>{
     if(request.url.startsWith('/admin')||request.url.startsWith('/api/admin/')){
       reply.header('cache-control','no-store');reply.header('referrer-policy','no-referrer');reply.header('x-content-type-options','nosniff');
@@ -44,6 +47,7 @@ export function registerAdminRoutes(app:FastifyInstance, db:Db, isProduction:boo
   const campaigns=new CampaignAdminService(db);
   const evidence=new EvidenceService(db,{getMessageContent:async()=>{throw new Error('Evidence media retrieval is worker-only.')}},evidenceStorage);
   const analytics=new AnalyticsService(db);
+  const campaignAssetUploadGuard = new CampaignAssetUploadGuard();
   const campaignImages=new Map<string,string>([['ole88-how-to.png','image/png'],['ole88-promo.png','image/png']]);
   app.get('/admin',async(_request,reply)=>reply.header('content-type','text/html; charset=utf-8').header('content-security-policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'").send(await readFile(resolve(publicRoot,'admin.html'))));
   app.get('/admin-campaign-images.js',async(_request,reply)=>reply.header('content-type','text/javascript; charset=utf-8').header('x-content-type-options','nosniff').send(await readFile(resolve(publicRoot,'admin-campaign-images.js'))));
@@ -54,6 +58,17 @@ export function registerAdminRoutes(app:FastifyInstance, db:Db, isProduction:boo
     if(!contentType)return reply.code(404).send({error:'Campaign image not found.'});
     return reply.header('content-type',contentType).header('cache-control','public, max-age=86400').header('x-content-type-options','nosniff')
       .send(await readFile(resolve(publicRoot,'campaign-images',name)));
+  });
+  app.get('/campaign-assets/:assetId',async(request,reply)=>{
+    try {
+      const {asset,content}=await campaignAssetStorage.get((request.params as {assetId:string}).assetId);
+      return reply.header('content-type',asset.contentType).header('content-length',content.length)
+        .header('cache-control','public, max-age=31536000, immutable').header('x-content-type-options','nosniff')
+        .header('content-disposition','inline').send(content);
+    } catch(error) {
+      if(error instanceof CampaignAssetError&&error.statusCode===404)return reply.code(404).send({error:'Campaign image not found.'});
+      throw error;
+    }
   });
   app.get('/admin-i18n.js',async(_request,reply)=>reply.header('content-type','text/javascript; charset=utf-8').header('x-content-type-options','nosniff').send(await readFile(resolve(publicRoot,'admin-i18n.js'))));
   app.get('/admin.js',async(_request,reply)=>reply.header('content-type','text/javascript; charset=utf-8').header('x-content-type-options','nosniff').send(await readFile(resolve(publicRoot,'admin.js'))));
@@ -83,12 +98,59 @@ export function registerAdminRoutes(app:FastifyInstance, db:Db, isProduction:boo
   };
   app.get('/api/admin/templates',(req,rep)=>route(req,rep,async()=>({templates:campaigns.templates()})));
   app.get('/api/admin/status',(req,rep)=>route(req,rep,async()=>({adminOnly})));
+  app.post('/api/admin/campaign-assets',{bodyLimit:10*1024*1024},(req,rep)=>route(req,rep,async(session)=>{
+    if(!Buffer.isBuffer(req.body))return rep.code(400).send({error:'Expected an image file body.'});
+    const contentType=req.headers['content-type']?.split(';',1)[0]?.trim()??'';
+    const suppliedName=req.headers['x-file-name'];
+    try {
+      const filename=typeof suppliedName==='string'?decodeFilename(suppliedName):'campaign-image';
+      const permit=campaignAssetUploadGuard.acquire(session.user.id);
+      if(permit.retryAfterSeconds){
+        return rep.header('retry-after',String(permit.retryAfterSeconds)).code(429)
+          .send({error:'Campaign image upload limit reached or upload capacity is busy. Please retry later.',code:'CAMPAIGN_ASSET_UPLOAD_THROTTLED'});
+      }
+      if(!permit.release)return rep.code(429).send({error:'Campaign image upload is temporarily unavailable.',code:'CAMPAIGN_ASSET_UPLOAD_THROTTLED'});
+      try {
+        const asset=await campaignAssetStorage.put(filename,contentType,req.body);
+        const imagePath=`/campaign-assets/${asset.assetId}`;
+        const origin=publicBaseUrl??`${req.protocol}://${req.headers.host}`;
+        return {asset,imageUrl:new URL(imagePath,origin).toString()};
+      } finally {
+        permit.release();
+      }
+    } catch(error) {
+      if(error instanceof CampaignAssetError)return rep.code(error.statusCode).send({error:error.message,code:error.code});
+      throw error;
+    }
+  }));
+  app.get('/api/admin/campaign-assets/orphans',(req,rep)=>route(req,rep,async()=>{
+    const stored=await campaignAssetStorage.list();
+    const rows=await db.select({settings:schema.campaigns.settings}).from(schema.campaigns);
+    const referenced=new Set(rows.flatMap((row)=>collectCampaignAssetIds(row.settings)));
+    const orphans=stored.filter((asset)=>!referenced.has(asset.assetId));
+    return {mode:'dry-run',automaticDeletion:false,orphanCount:orphans.length,orphans};
+  }));
   app.get('/api/admin/campaigns',(req,rep)=>route(req,rep,async()=>({campaigns:await campaigns.list()})));
   app.post('/api/admin/campaigns',(req,rep)=>route(req,rep,async(session)=>{
     const data=z.object({templateId:z.string().min(1),code:codeSchema}).safeParse(body(req));if(!data.success)return rep.code(400).send({error:'Invalid input.',details:data.error.issues});
     return campaigns.create(session.user.id,data.data.templateId,data.data.code);
   }));
   app.get('/api/admin/campaigns/:id',(req,rep)=>route(req,rep,async()=>campaigns.detail((req.params as {id:string}).id)));
+  app.post('/api/admin/campaigns/:id/image-plan/export',(req,rep)=>route(req,rep,async()=>{
+    const input=z.object({expectedVersion:z.number().int().positive(),draft:templateDraftSchema}).safeParse(body(req));
+    if(!input.success)return rep.code(422).send({error:'Draft is invalid; correct the red items before export.',validation:{
+      status:'blocked',blockers:input.error.issues.map((issue)=>({
+        path:issue.path.join('.'),message:issue.message,selector:selectorForPath(issue.path.filter((part):part is string|number=>typeof part==='string'||typeof part==='number')),
+      })),warnings:[],
+    }});
+    const current=await campaigns.detail((req.params as {id:string}).id);
+    if(current.campaign.version!==input.data.expectedVersion)return rep.code(409).send({error:'Campaign changed since it was opened.',code:'CAMPAIGN_VERSION_CONFLICT'});
+    if(current.campaign.status!=='DRAFT')return rep.code(409).send({error:'Image handoffs can only be exported from a DRAFT campaign.',code:'IMAGE_PLAN_REQUIRES_DRAFT'});
+    const origin=publicBaseUrl??`${req.protocol}://${req.headers.host}`;
+    const result=await validateAndBuildCampaignImagePlan(normalizeDraft(input.data.draft),current.campaign.version,origin,campaignAssetStorage);
+    if(result.validation.status!=='ready')return rep.code(422).send({error:'Plan is blocked until all red items are corrected.',validation:result.validation});
+    return result;
+  }));
   app.post('/api/admin/campaigns/:id/duplicate',(req,rep)=>route(req,rep,async(session)=>{
     const data=z.object({code:codeSchema}).safeParse(body(req));if(!data.success)return rep.code(400).send({error:'Invalid input.'});
     return campaigns.duplicate(session.user.id,(req.params as {id:string}).id,data.data.code);
@@ -175,6 +237,16 @@ function isSameOrigin(request:FastifyRequest, publicBaseUrl?:string) {
 function normalizeDraft<T extends {campaign:{heroImage:string|null;rewardType:string|null;rewardValue:string|null}}>(draft:T):T {
   const c=draft.campaign;
   return {...draft,campaign:{...c,heroImage:c.heroImage?.trim()||null,rewardType:c.rewardType?.trim()||null,rewardValue:c.rewardValue?.trim()||null}};
+}
+function decodeFilename(value:string):string {
+  try{return decodeURIComponent(value);}
+  catch{throw new CampaignAssetError('The original filename header is malformed.','INVALID_FILENAME',400);}
+}
+function collectCampaignAssetIds(settings:Record<string,unknown>):string[] {
+  const maps=settings.imageHotspots;
+  if(!Array.isArray(maps))return [];
+  return maps.flatMap((map)=>map&&typeof map==='object'&&!Array.isArray(map)
+    &&'assetId' in map&&typeof map.assetId==='string'?[map.assetId]:[]);
 }
 function sendError(reply:FastifyReply,error:unknown) {
   const e=error as {code?:string;message?:string;constraint?:string};

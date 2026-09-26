@@ -21,9 +21,11 @@ The preview uses the same `buildCampaignCard` and `buildActivityCard` renderer a
 
 ## Images and LINE constraints
 
-Image upload is not configured. Store an HTTPS image URL in the campaign; the browser displays a preview. The application does not fetch the URL server-side. The URL must be publicly reachable by LINE when a campaign is sent.
+Campaign hero and secondary images can use an HTTPS URL; the browser displays a preview and the application does not fetch that URL server-side. The URL must be publicly reachable by LINE when a campaign is sent.
 
-The Admin image-hotspot planner accepts up to four HTTPS image URLs, lets an administrator draw normalized rectangular areas (0–1000 coordinate scale), and binds each area to an enabled campaign button or activity. The draft stores this configuration at `campaign.settings.imageHotspots`; Export downloads an `ole88-image-hotspot-plan/v1` JSON file with area coordinates and the referenced action identity/value. Draft validation rejects out-of-bounds areas and missing/disabled targets. **This is currently a design/export aid only:** the LINE campaign renderer does not emit Imagemap messages from these hotspots. LINE Imagemap actions have provider-specific constraints and do not directly support LINE postback actions; do not treat the exported plan as deployed behavior or publish until a separate runtime integration is implemented and tested. Current campaign images remain HTTPS URLs rendered through Flex.
+The Admin Campaign Image Planner accepts up to four JPEG/PNG images per plan (10 MiB maximum per file, 4096 pixels per dimension, and 16 megapixels decoded). Uploads are limited to 20 per Admin per rolling hour with at most two image-processing operations concurrently per application process. It records verified file metadata and opaque asset IDs, binds normalized rectangular touch areas to existing targets, and persists the design under `campaign.settings.imageHotspots`. Each touch area has a stable ID and integer coordinates from 0–1000 against the uncropped image plane; x/y may be zero, while width/height must be positive and remain within the image. Use arrow keys to move a focused area and Shift + arrow keys to resize it.
+
+Export is a server-validated `ole88.campaign-image-handoff/2.0.0` internal team plan with image metadata/checksums, normalized and derived pixel coordinates, target action details, checked/not-checked validation rules, warnings, and a Thai AI handoff prompt. The JSON does not embed image bytes; separately attach or open the referenced images. Upload requires Admin authentication, same-origin/CSRF checks, actual image decoding, and JPEG/PNG signature validation. Public image delivery uses opaque asset IDs only and never exposes the storage directory. The dry-run orphan endpoint reports assets not referenced by saved campaign settings and never deletes them. There is no schema migration because asset metadata and references are stored in existing JSONB settings and filesystem sidecars. Production must configure `CAMPAIGN_ASSET_STORAGE_DIR` as an absolute persistent path outside a release and back it up; the public reverse proxy must be separately configured to expose only the asset route. **This is only a planning handoff:** it is not a LINE message or ready-to-use Imagemap, does not make hotspots clickable in LINE, and does not test public image reachability or LINE acceptance. The Flex renderer, campaign webhook behavior, publishing, and outbound LINE messages are unchanged. Changes in this worktree have not been deployed to staging.
 
 LINE documents Flex image URLs as HTTPS (TLS 1.2+), JPEG/PNG, no more than 1024 × 1024 pixels and 10 MB, with URL length up to 2000 characters. The app validates HTTPS and URL length but cannot prove image format, dimensions, size, or public reachability without a real remote check.
 
@@ -37,6 +39,10 @@ Official references: [LINE Messaging API reference](https://developers.line.biz/
 - `GET /api/admin/campaigns`, `GET /api/admin/templates`
 - `POST /api/admin/campaigns` (template + code), `GET /api/admin/campaigns/:id`
 - `PUT /api/admin/campaigns/:id` (full draft graph + `expectedVersion`)
+- `POST /api/admin/campaign-assets` (raw JPEG/PNG bytes; Admin session + CSRF)
+- `GET /campaign-assets/:assetId` (public immutable image by opaque UUID)
+- `GET /api/admin/campaign-assets/orphans` (authenticated dry-run report; no deletion)
+- `POST /api/admin/campaigns/:id/image-plan/export` (validates the submitted draft and returns the handoff JSON plus Thai prompt; requires the observed draft version)
 - `POST /api/admin/campaigns/:id/duplicate` (new code)
 - `POST /api/admin/campaigns/preview` (unsaved graph)
 - `POST /api/admin/campaigns/:id/publish` and `/pause` (`expectedVersion`)

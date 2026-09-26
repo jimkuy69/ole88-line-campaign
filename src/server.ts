@@ -12,6 +12,7 @@ import { DrizzleWebhookEventStore, WebhookInbox } from './modules/webhooks/webho
 import { createWebhookEventProcessor, type WebhookEventProcessor } from './modules/webhooks/webhook-processor.js';
 import { registerAdminRoutes } from './modules/admin/admin-routes.js';
 import { FileSystemEvidenceStorage } from './modules/evidence/storage.js';
+import { CampaignAssetStorage, CAMPAIGN_ASSET_MAX_BYTES } from './modules/campaigns/campaign-asset-storage.js';
 
 type Db = NodePgDatabase<typeof schema>;
 const READINESS_TIMEOUT_MS = 2_000;
@@ -26,6 +27,8 @@ export function buildServer(config: ReturnType<typeof loadConfig>, db: Db, proce
   });
   app.removeContentTypeParser('application/json');
   app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (_request, body, done) => done(null, body));
+  app.addContentTypeParser(['image/jpeg', 'image/png'], { parseAs: 'buffer', bodyLimit: CAMPAIGN_ASSET_MAX_BYTES },
+    (_request, body, done) => done(null, body));
 
   const inbox = new WebhookInbox(new DrizzleWebhookEventStore(db));
   let processingTimer: NodeJS.Timeout | undefined;
@@ -66,7 +69,8 @@ export function buildServer(config: ReturnType<typeof loadConfig>, db: Db, proce
       if (timeout) clearTimeout(timeout);
     }
   });
-  registerAdminRoutes(app, db, config.NODE_ENV === 'production',new FileSystemEvidenceStorage(config.EVIDENCE_STORAGE_DIR),config.PUBLIC_BASE_URL,config.ADMIN_ONLY);
+  registerAdminRoutes(app, db, config.NODE_ENV === 'production',new FileSystemEvidenceStorage(config.EVIDENCE_STORAGE_DIR),
+    new CampaignAssetStorage(config.CAMPAIGN_ASSET_STORAGE_DIR),config.PUBLIC_BASE_URL,config.ADMIN_ONLY);
 
   app.post('/webhooks/line', async (request, reply) => {
     if (config.ADMIN_ONLY) return reply.code(503).send({ error: 'LINE webhook processing is disabled in ADMIN_ONLY mode' });

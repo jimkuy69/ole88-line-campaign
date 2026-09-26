@@ -1,16 +1,28 @@
 import { createHmac } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import sharp from 'sharp';
 import { loadConfig } from '../../src/config/env.js';
 import { buildServer } from '../../src/server.js';
+import { CampaignAssetStorage } from '../../src/modules/campaigns/campaign-asset-storage.js';
 
 describe('HTTP boundary', () => {
   const servers: ReturnType<typeof buildServer>[] = [];
-  afterEach(async () => { await Promise.all(servers.splice(0).map((server) => server.close())); });
+  const directories: string[] = [];
+  afterEach(async () => {
+    await Promise.all(servers.splice(0).map((server) => server.close()));
+    await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+  });
 
   it('parses ADMIN_ONLY as an explicit boolean opt-in', () => {
     expect(loadConfig({ NODE_ENV: 'test', DATABASE_URL: 'postgres://localhost/test', ADMIN_ONLY: 'true' }).ADMIN_ONLY).toBe(true);
     expect(loadConfig({ NODE_ENV: 'test', DATABASE_URL: 'postgres://localhost/test', ADMIN_ONLY: 'false' }).ADMIN_ONLY).toBe(false);
     expect(loadConfig({ NODE_ENV: 'test', DATABASE_URL: 'postgres://localhost/test' }).ADMIN_ONLY).toBe(false);
+    expect(() => loadConfig({
+      NODE_ENV: 'production', DATABASE_URL: 'postgres://localhost/test', PUBLIC_BASE_URL: 'https://campaign.example',
+    })).toThrow('CAMPAIGN_ASSET_STORAGE_DIR');
   });
 
   it('serves health without requiring database I/O', async () => {
@@ -38,7 +50,7 @@ describe('HTTP boundary', () => {
     expect(response.statusCode).toBe(200);
     expect(response.headers['content-type']).toContain('text/javascript');
     expect(response.headers['x-content-type-options']).toBe('nosniff');
-    expect(response.body).toContain('Export hotspot plan JSON');
+    expect(response.body).toContain('Validate and export handoff');
   });
 
   it('serves only the allowlisted campaign image assets', async () => {
@@ -51,6 +63,94 @@ describe('HTTP boundary', () => {
     expect(image.headers['cache-control']).toContain('public');
     expect(image.rawPayload.length).toBeGreaterThan(1_000);
     expect(unknown.statusCode).toBe(404);
+  });
+
+  it('serves uploaded campaign images only by opaque asset id and keeps upload behind Admin auth', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'ole88-upload-route-'));
+    directories.push(directory);
+    const storage = new CampaignAssetStorage(directory);
+    const image = await sharp({ create: { width: 4, height: 3, channels: 3, background: 'white' } }).png().toBuffer();
+    const asset = await storage.put('poster.png', 'image/png', image);
+    const db = {
+      select: () => ({
+        from() { return this; },
+        innerJoin() { return this; },
+        where() { return this; },
+        limit: async () => [],
+      }),
+    };
+    const app = buildServer(loadConfig({
+      NODE_ENV: 'test', DATABASE_URL: 'postgres://localhost/test', CAMPAIGN_ASSET_STORAGE_DIR: directory,
+    }), db as never);
+    servers.push(app);
+
+    const publicImage = await app.inject({ method: 'GET', url: `/campaign-assets/${asset.assetId}` });
+    const traversal = await app.inject({ method: 'GET', url: '/campaign-assets/..%2Fsecret' });
+    const unauthenticatedUpload = await app.inject({
+      method: 'POST',
+      url: '/api/admin/campaign-assets',
+      headers: { 'content-type': 'image/png', 'x-file-name': 'poster.png' },
+      payload: image,
+    });
+    expect(publicImage.statusCode).toBe(200);
+    expect(publicImage.headers['content-type']).toContain('image/png');
+    expect(publicImage.headers['cache-control']).toContain('immutable');
+    expect(publicImage.rawPayload).toEqual(image);
+    expect(traversal.statusCode).toBe(404);
+    expect(unauthenticatedUpload.statusCode).toBe(401);
+  });
+
+  it('accepts a verified image upload only with an Admin session and the session CSRF token', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'ole88-authenticated-upload-'));
+    directories.push(directory);
+    const db = {
+      select: () => {
+        const query = {
+          from() { return this; },
+          innerJoin() { return this; },
+          where() { return this; },
+          limit: async () => [{ session: { csrfToken: 'valid-csrf' }, user: { id: 'admin-id', username: 'admin' } }],
+        };
+        return query;
+      },
+    };
+    const app = buildServer(loadConfig({
+      NODE_ENV: 'test', DATABASE_URL: 'postgres://localhost/test', CAMPAIGN_ASSET_STORAGE_DIR: directory,
+    }), db as never);
+    servers.push(app);
+    const image = await sharp({ create: { width: 2, height: 2, channels: 3, background: 'white' } }).png().toBuffer();
+    const headers = {
+      cookie: 'ole88_admin_session=session-token',
+      'content-type': 'image/png',
+      'x-file-name': 'campaign%20poster.png',
+    };
+    const denied = await app.inject({
+      method: 'POST', url: '/api/admin/campaign-assets',
+      headers, payload: image,
+    });
+    const accepted = await app.inject({
+      method: 'POST', url: '/api/admin/campaign-assets',
+      headers: { ...headers, 'x-csrf-token': 'valid-csrf' }, payload: image,
+    });
+    expect(denied.statusCode).toBe(403);
+    expect(accepted.statusCode).toBe(200);
+    expect(accepted.json().asset).toMatchObject({
+      originalFilename: 'campaign poster.png', contentType: 'image/png', width: 2, height: 2,
+    });
+    expect(accepted.json().imageUrl).toContain(`/campaign-assets/${accepted.json().asset.assetId}`);
+    for (let index = 1; index < 20; index += 1) {
+      const upload = await app.inject({
+        method: 'POST', url: '/api/admin/campaign-assets',
+        headers: { ...headers, 'x-csrf-token': 'valid-csrf' }, payload: image,
+      });
+      expect(upload.statusCode).toBe(200);
+    }
+    const throttled = await app.inject({
+      method: 'POST', url: '/api/admin/campaign-assets',
+      headers: { ...headers, 'x-csrf-token': 'valid-csrf' }, payload: image,
+    });
+    expect(throttled.statusCode).toBe(429);
+    expect(throttled.headers['retry-after']).toBeDefined();
   });
 
   it('reports readiness only when PostgreSQL responds, without leaking connection details', async () => {
