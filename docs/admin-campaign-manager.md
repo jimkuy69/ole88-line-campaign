@@ -9,6 +9,8 @@
 
 There is no default admin, no `ADMIN_SECRET` login, and no admin creation route. Admin sessions use opaque random tokens stored only as SHA-256 hashes, eight-hour expiry, HttpOnly/SameSite=Strict cookies (Secure in production), and a CSRF token required for mutations. Login failures are rate-limited in PostgreSQL per source-IP hash. Do not expose the development server publicly.
 
+The browser interface defaults to Thai. Use the header toggle to switch between Thai and English; the selection is saved in that browser. This localizes interface labels only and does not translate campaign content.
+
 ## Campaign workflow
 
 The UI supports campaign listing, creation from one of the central templates, duplicate-to-new-draft, editing, preview, publish, and pause. The template registry lives in `src/modules/admin/templates.ts`; templates define initial campaign fields, buttons, activities, and the three Phase 2 messages. Campaign-specific behavior remains data-driven. The `OLE88_WELCOME_100` row remains sample seed data.
