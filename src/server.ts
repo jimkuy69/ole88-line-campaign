@@ -85,7 +85,7 @@ export function buildServer(config: ReturnType<typeof loadConfig>, db: Db, proce
       return reply.code(400).send({ error: 'Invalid webhook payload' });
     }
     const result = await inbox.acceptLineEvents(envelope.events.map(normalizeLineEvent));
-    return reply.code(202).send(result);
+    return reply.code(200).send(result);
   });
   return app;
 }

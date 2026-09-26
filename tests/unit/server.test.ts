@@ -109,7 +109,7 @@ describe('HTTP boundary', () => {
     const accepted = await app.inject({ method: 'POST', url: '/webhooks/line', headers: {
       'content-type': 'application/json', 'x-line-signature': signature,
     }, payload: raw });
-    expect(accepted.statusCode).toBe(202);
+    expect(accepted.statusCode).toBe(200);
     expect(accepted.json()).toEqual({ accepted: 0, duplicates: 0 });
 
     const denied = await app.inject({ method: 'POST', url: '/webhooks/line', headers: {
