@@ -67,3 +67,22 @@ This closeout is tracked separately from the completed product phases above. The
 | Incident and provider follow-up | NOT STARTED | Preserve date/timezone and necessary original July 14 log text; keep `gil-u26` systemd-stop fact distinct from login evidence; ask Kamatera about initiator and Console/API/maintenance audit records |
 
 Detailed scope and safety limits: [docs/project-completion-plan.md](docs/project-completion-plan.md). Dated evidence and the current acceptance result: [docs/staging-verification-report.md](docs/staging-verification-report.md). No stage is marked passed until its evidence is recorded.
+
+## Admin-only staging continuation — current status, 2026-09-27
+
+This status supersedes the older staging acceptance rows above where newer evidence is available. The Phase 1–5 history and historical test counts are retained; they are not treated as verification of this current source or of the VPS deployment.
+
+| Track | Status | Current evidence / next gate |
+|---|---|---|
+| Planner responsive blocker | PASS (local browser) | Mobile and issue-filter wrapping fixed in `public/admin.css`. Actual Planner scripts loaded a local synthetic image draft; image load, hotspot keyboard edit/resize, draw, and in-memory reload passed at 320, 375, 768, 1024, and 1440 px without horizontal overflow. Repeat this check against the VPS release after deployment. |
+| Unit tests | PASS | 50 tests across 10 unit files passed. |
+| Typecheck/build/lint/scripts | PASS | Typecheck, build, lint, both Admin script syntax checks, and `git diff --check` passed. |
+| Admin browser/server acceptance | NOT YET TESTED (current local run) | Static preview had no Admin API; no authentication, session expiry, server-backed save/reload, or preview API workflow was exercised. Existing 2026-09-27 staging observations remain separate evidence for ADMIN_ONLY notice, disabled Publish, draft actions, filters, language switch, and zero ACTIVE campaigns. |
+| Dashboard synthetic event aggregation | BLOCKED | Existing integration fixture uses `AnalyticsService` directly on an isolated test DB; no LINE/webhook or production backdoor is needed. Cannot execute until a local disposable PostgreSQL target is provisioned and verified. |
+| Integration suite | BLOCKED | `TEST_DATABASE_URL` absent; `postgres.exe` and `pg_ctl.exe` not on PATH. No database was touched, and integration tests/migrations were not run. |
+| VPS deployment and responsive retest | NOT YET TESTED | No SSH/sudo/deployment performed. Last operator-verified VPS release remains `218e0594ed6c23e9b884adf178c7399a5f0270ab`; local HEAD at the start of this continuation was `604b953d404f4db63914bb7f45f427a1e6f602ff`. |
+| Backup/restore/reboot/provider follow-up | DEFERRED TO OPERATIONAL ACCEPTANCE | Follow the existing operational checklist; requires authorized VPS/database/storage/provider access and evidence. |
+| LINE/public access/production prerequisites | DEFERRED | Keep LINE disconnected, `ADMIN_ONLY` enabled, Admin private, and do not configure public exposure for this staging acceptance. |
+| Working tree hygiene | PASS (preserved) | The pre-existing report changes are retained. Root `debug.log` was not deleted or staged; it is ignored to prevent accidental commit. |
+
+**Recommended next action:** provision and verify a dedicated disposable local PostgreSQL test database (for example `ole88_test` bound to loopback, with a test-only role), set `TEST_DATABASE_URL` locally without sharing it, then run the full integration suite and confirm its test/skip/cleanup results. Do not substitute staging, shared, or production databases.
