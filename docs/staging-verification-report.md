@@ -2,16 +2,16 @@
 
 **Report started:** 2026-09-26  
 **Repository baseline:** `218e0594ed6c23e9b884adf178c7399a5f0270ab`
-**Staging release commit:** `218e0594ed6c23e9b884adf178c7399a5f0270ab`
+**Staging release commit:** `bf9ccf5b5e27bbd29f4a9b4058ba303b2d89fc98`
 **Local source HEAD at the start of this continuation (2026-09-27):** `604b953d404f4db63914bb7f45f427a1e6f602ff` (continuation changes not deployed)
-**Verified source commit after this continuation:** `525226c71b8e228d34a119fd407e038c6dafb33c` (pushed to `staging/campaign-image-planner`, not deployed)
+**Verified source commit after this continuation:** `bf9ccf5b5e27bbd29f4a9b4058ba303b2d89fc98` (deployed to Admin-only staging on 2026-09-27)
 **Overall result:** **ADMIN-ONLY STAGING AVAILABLE — not production-ready and not connected to LINE.**
 
 ## Repository and code
 
 | Check | Result | Evidence |
 |---|---|---|
-| Deployed commit | PASS | VPS release and repository HEAD are `218e0594ed6c23e9b884adf178c7399a5f0270ab` |
+| Deployed commit | PASS | VPS service WorkingDirectory and release Git HEAD are `bf9ccf5b5e27bbd29f4a9b4058ba303b2d89fc98` |
 | Existing worktree changes | PRESERVED | The modified report was retained. Root `debug.log` remains on disk, was not staged or deleted, and is ignored to prevent accidental commit; only metadata was recorded. |
 | `/health` and `/ready` | PASS (VPS) | Operator verified both return HTTP 200 from the VPS on 2026-09-26 |
 | Admin localization asset | PASS (VPS) | `/admin-i18n.js` returned HTTP 200 with `text/javascript; charset=utf-8` after deploying the route fix |
@@ -77,7 +77,7 @@ The synthetic QA draft is intentionally retained in staging for inspection. Its 
 
 ## Admin-only continuation — responsive fix and safe local checks — 2026-09-27
 
-The local source HEAD for this check was `604b953d404f4db63914bb7f45f427a1e6f602ff`; this source was not deployed to the VPS. The VPS release remains the last operator-verified `218e0594ed6c23e9b884adf178c7399a5f0270ab`.
+At the time of this checkpoint, the local source HEAD was `604b953d404f4db63914bb7f45f427a1e6f602ff`; its responsive changes were not yet deployed. The deployment status below supersedes the VPS status recorded here.
 
 | Track | Status | Evidence / remaining work |
 |---|---|---|
@@ -90,9 +90,27 @@ The local source HEAD for this check was `604b953d404f4db63914bb7f45f427a1e6f602
 | Static checks | PASS | `npm run typecheck`, `npm run build`, `npm run lint`, `node --check public/admin.js`, `node --check public/admin-image-hotspot-planner.js`, and `git diff --check` passed. |
 | Integration tests / disposable DB | PASS | Full suite: 75 passed across 11 files, zero skipped. PostgreSQL 18.6 was initialized this round in a new cluster under `work/ole88-test-round-ef6e87d`; the verified target was `ole88_test` / `ole88_test` at `127.0.0.1:55447`, bound only to loopback. The integration setup recreated the `public` schema and applied all migrations from empty; post-run checks found 11 migration records and 17 tables. |
 | Integration test correction | PASS | The first run found one pre-existing test-fixture mismatch (74 passed, 1 failed): it supplied `PUBLIC_BASE_URL` while expecting that value to configure the Admin origin. The fixture now configures `ADMIN_ORIGIN` independently from the campaign-image `PUBLIC_BASE_URL`, matching the documented origin separation; the full rerun passed. No production security behavior was loosened. |
-| Branch push / CI | PASS / NOT TRIGGERED | Verified source commit `525226c71b8e228d34a119fd407e038c6dafb33c` is on `origin/staging/campaign-image-planner`. The `Checks` workflow is configured for pushes to `main` and pull requests targeting `main`, so no GitHub Actions run was triggered by this staging-branch push. |
+| Branch push / CI | PASS / NOT TRIGGERED | Verified source commit `bf9ccf5b5e27bbd29f4a9b4058ba303b2d89fc98` is on `origin/staging/campaign-image-planner`. The `Checks` workflow is configured for pushes to `main` and pull requests targeting `main`, so no GitHub Actions run was triggered by this staging-branch push. |
 | Disposable DB cleanup | PASS | After the test suite, the database contained one synthetic campaign row and no users, tracking events, webhook events, Admin users, or sessions. The loopback test server was gracefully stopped and its port closed. With explicit user approval, only the uniquely created `work/ole88-test-round-ef6e87d` cluster directory was deleted; it is confirmed absent. |
-| VPS / deployment | BLOCKED on workspace SSH authentication | The operator confirmed an interactive SSH terminal, but it is not attached to this workspace. The workspace's non-interactive SSH client could not authenticate (`Permission denied (publickey,password)`). No credential was requested or displayed; no sudo, package, database, service, or deployment command was run and no VPS files or services were changed. |
+| VPS / deployment at this checkpoint | BLOCKED on workspace SSH authentication | The operator confirmed an interactive SSH terminal, but it is not attached to this workspace. The workspace's non-interactive SSH client could not authenticate (`Permission denied (publickey,password)`). The operator later completed the deployment, as recorded below. |
 | Working tree hygiene | PASS (preserved) | The existing `docs/staging-verification-report.md` edits were retained and updated. The untracked root `debug.log` was left in place and not staged or deleted; `/debug.log` is now ignored to prevent accidental commit of a local log. |
 
-No LINE credential, webhook, public Admin route, shared database, production database, or staging database was used for these local checks. Existing CSS breakage is resolved in the local worktree, but VPS responsive verification and the remaining operations acceptance gates are still required before closeout.
+No LINE credential, webhook, public Admin route, shared database, production database, or staging database was used for these local checks. VPS responsive verification and the remaining operations acceptance gates are still required before closeout.
+
+## Admin-only staging deployment — 2026-09-27
+
+Deployment was completed by the operator from the existing interactive SSH session. The app remains private and `ADMIN_ONLY` remains enabled. No migrations were run; this release contains no schema changes.
+
+| Check | Result | Evidence |
+|---|---|---|
+| Release commit | PASS | `staging/campaign-image-planner` commit `bf9ccf5b5e27bbd29f4a9b4058ba303b2d89fc98`; clean release checkout under `/opt/ole88-staging/releases/` |
+| systemd release path | PASS | Service runs from `/opt/ole88-staging/releases/bf9ccf5b5e27bbd29f4a9b4058ba303b2d89fc98`. A later-sorting additive drop-in was needed because `zz-csp-styles.conf` overrides the earlier `99-release-...conf`; no existing drop-in was edited or removed. |
+| Service and access mode | PASS | `ole88-staging` active/running; `ADMIN_ONLY=true` verified from the running process environment |
+| Network binding | PASS | Port 3000 listens only on `127.0.0.1` |
+| Health/readiness | PASS | `/health` = `{"status":"ok"}` and `/ready` = `{"status":"ready"}` after startup |
+| Responsive CSS asset | PASS | `/admin.css` SHA-256 `3f7f94441e2f28d8bf92dba5c74bcae5501e67519b8013517b33fd4e96b8912b`, matching the built release asset |
+| Migration / LINE / publish | NOT RUN | No migrations, LINE requests, campaign publishing, or changes to production/shared databases were performed. |
+| VPS browser responsive retest | NOT VERIFIED | The CSS was deployed, but authenticated staging browser checks at mobile/tablet/desktop widths remain outstanding. |
+| Remaining operations acceptance | OPEN | Paired backup/restore rehearsal, post-deployment reboot recovery, and July 14 log/Kamatera follow-up remain outstanding. |
+
+This deployment evidence is based on operator-provided VPS output. It does not constitute production sign-off.
