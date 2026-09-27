@@ -4,6 +4,7 @@
 **Repository baseline:** `218e0594ed6c23e9b884adf178c7399a5f0270ab`
 **Staging release commit:** `218e0594ed6c23e9b884adf178c7399a5f0270ab`
 **Local source HEAD at the start of this continuation (2026-09-27):** `604b953d404f4db63914bb7f45f427a1e6f602ff` (continuation changes not deployed)
+**Verified source commit after this continuation:** `525226c71b8e228d34a119fd407e038c6dafb33c` (pushed to `staging/campaign-image-planner`, not deployed)
 **Overall result:** **ADMIN-ONLY STAGING AVAILABLE — not production-ready and not connected to LINE.**
 
 ## Repository and code
@@ -89,8 +90,9 @@ The local source HEAD for this check was `604b953d404f4db63914bb7f45f427a1e6f602
 | Static checks | PASS | `npm run typecheck`, `npm run build`, `npm run lint`, `node --check public/admin.js`, `node --check public/admin-image-hotspot-planner.js`, and `git diff --check` passed. |
 | Integration tests / disposable DB | PASS | Full suite: 75 passed across 11 files, zero skipped. PostgreSQL 18.6 was initialized this round in a new cluster under `work/ole88-test-round-ef6e87d`; the verified target was `ole88_test` / `ole88_test` at `127.0.0.1:55447`, bound only to loopback. The integration setup recreated the `public` schema and applied all migrations from empty; post-run checks found 11 migration records and 17 tables. |
 | Integration test correction | PASS | The first run found one pre-existing test-fixture mismatch (74 passed, 1 failed): it supplied `PUBLIC_BASE_URL` while expecting that value to configure the Admin origin. The fixture now configures `ADMIN_ORIGIN` independently from the campaign-image `PUBLIC_BASE_URL`, matching the documented origin separation; the full rerun passed. No production security behavior was loosened. |
+| Branch push / CI | PASS / NOT TRIGGERED | Verified source commit `525226c71b8e228d34a119fd407e038c6dafb33c` is on `origin/staging/campaign-image-planner`. The `Checks` workflow is configured for pushes to `main` and pull requests targeting `main`, so no GitHub Actions run was triggered by this staging-branch push. |
 | Disposable DB cleanup | PARTIAL / approval needed for file removal | After the test suite, the database contained one synthetic campaign row and no users, tracking events, webhook events, Admin users, or sessions. The loopback test server was gracefully stopped and its port closed. The uniquely created `work/ole88-test-round-ef6e87d` data directory remains on disk; removing it would irreversibly delete that disposable test cluster and its migration/test data. |
-| VPS / deployment | NOT YET TESTED this round | No SSH, sudo, package, database, service, or deployment command was run. No VPS files or services were changed. |
+| VPS / deployment | BLOCKED on SSH | No existing `ole88-staging` SSH process or local Admin tunnel was found. No SSH, sudo, package, database, service, or deployment command was run; no VPS files or services were changed. |
 | Working tree hygiene | PASS (preserved) | The existing `docs/staging-verification-report.md` edits were retained and updated. The untracked root `debug.log` was left in place and not staged or deleted; `/debug.log` is now ignored to prevent accidental commit of a local log. |
 
 No LINE credential, webhook, public Admin route, shared database, production database, or staging database was used for these local checks. Existing CSS breakage is resolved in the local worktree, but VPS responsive verification and the remaining operations acceptance gates are still required before closeout.
