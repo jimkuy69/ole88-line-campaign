@@ -257,9 +257,9 @@ integration('PostgreSQL foundation constraints', () => {
     } finally { await app.close(); }
   });
 
-  it('validates Admin Origin against the configured public HTTPS origin behind a proxy', async () => {
+  it('validates Admin Origin independently from the public asset origin behind a proxy', async () => {
     await new AdminAuthService(db).createFirstAdmin('staging-admin','A safe staging passphrase!');
-    const app=buildServer(loadConfig({NODE_ENV:'test',DATABASE_URL:databaseUrl!,PUBLIC_BASE_URL:'https://staging.example.test'}),db);
+    const app=buildServer(loadConfig({NODE_ENV:'test',DATABASE_URL:databaseUrl!,PUBLIC_BASE_URL:'https://campaign-assets.example.test',ADMIN_ORIGIN:'https://staging.example.test'}),db);
     try {
       const rejected=await app.inject({method:'POST',url:'/api/admin/login',headers:{origin:'https://attacker.example'},payload:{username:'staging-admin',password:'A safe staging passphrase!'}});
       expect(rejected.statusCode).toBe(403);
